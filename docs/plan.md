@@ -15,8 +15,13 @@
 | D2 | 技术路线 | **路线 B**：原生 Windows 绿色包（嵌入式 Python venv + 内嵌前端）+ 托盘启动器 + Inno Setup 安装器。不用 PyInstaller 单 exe（体积会因 pandas/numpy/pyarrow 膨胀到 2GB+，且多进程 spawn 与冻结包兼容性差） | 已定 |
 | D3 | 代码模型 | **单一代码库**：业务代码只存在于 DataViewer 主仓；本仓是产品化/打包层（补丁栈 + 启动器 + 安装器 + CI + 文档）。适配改动以 patch 形式在本仓迭代，**最终目标提交回主仓** | 已定 |
 | D4 | 首版功能裁剪 | 禁用：**ray（分布式质检）、datalab 一键质检、HF 下载、arena 导入、claude API/CLI**。代码保留、后端开关关闭、前端入口隐藏 | 已定 |
-| D5 | Gateway/S3/volcengine/scp | 同属外网能力，建议首版一并禁用（待确认，见开放问题 Q1） | 待确认 |
+| D5 | Gateway/S3/volcengine/scp | 首版随 D4 一并禁用（Q1 拍板）：代码保留、后端开关关闭、入口隐藏，后续随时可开 | 已定 2026-08-19 |
 | D6 | TrajViz / workbench / labeling worker | 首版不打包、入口禁用；作为后续可选组件（P2 再评估） | 待确认 |
+| D7 | 构建环境（Q2） | M2 阶段用手工脚本（build-win.ps1）在 Windows 开发机跑通；M4 再决定流水线（GitHub Actions windows-latest / 内部构建机） | 已定 2026-08-19 |
+| D8 | 数据目录（Q3） | `%USERPROFILE%\DataViewerData`（DATA_ROOT）；元数据/密钥/日志在 `%LOCALAPPDATA%\DataViewerDesktop`；卸载不丢数据 | 已定 2026-08-19 |
+| D9 | 登录体验（Q4） | 保留 admin 登录页 + "记住我"（localStorage 持久化 token），改动最小 | 已定 2026-08-19 |
+| D10 | 补丁工作流（Q5） | 先 `patches/` 迭代（主仓发布节奏不受影响）；M4 起转"主仓直接开分支开发，本仓只做打包" | 已定 2026-08-19 |
+| D11 | 浏览器（Q6） | 首版用系统默认浏览器；捆绑 Chromium 列为 P2 可选 | 已定 2026-08-19 |
 
 ---
 
@@ -240,7 +245,7 @@ sync-upstream.sh:
 | Windows 验证 | windows-latest | 桌面版依赖集 pytest + 冒烟 + 打包 | 每次上游 tag / PR |
 | 发布 | windows-latest | 出 zip + exe 产物 | 上游 release 后 |
 
-构建机选型（内部 Windows 机 vs GitHub Actions）见 Q2。
+构建环境按 D7：M2 手工脚本跑通后再决定流水线。
 
 ---
 
@@ -271,13 +276,13 @@ sync-upstream.sh:
 
 ---
 
-## 9. 开放问题（拍板项）
+## 9. 开放问题（已全部拍板，2026-08-19）
 
-| # | 问题 | 选项 | 我的建议 |
-|---|------|------|----------|
-| Q1 | Gateway / S3 / volcengine / scp 首版是否随 D4 一并禁用？ | 禁用 / Gateway 保留（内网单机也有推 Gateway 场景） | 首版全部禁用，代码保留，开关随时可开 |
-| Q2 | Windows 构建环境 | GitHub Actions windows-latest / 内部 Windows 构建机 / 开发机手工脚本 | 先手工脚本跑通 M2，再决定流水线 |
-| Q3 | 数据目录默认位置 | `%USERPROFILE%\DataViewerData` / 安装目录内 `data\` / 首次启动让用户选 | 用户目录（卸载不丢数据） |
-| Q4 | 单机登录体验 | 保留 admin 登录页（记忆登录）/ 免密直入（首次进管理员） | 保留登录页 + 记住我（改动最小） |
-| Q5 | 补丁 vs 直接改主仓 | 本仓 patches/ 迭代、稳定后 PR / 直接在主仓开分支开发（本仓只做打包） | 先 patches（主仓迭代节奏不受影响），M4 转直改 |
-| Q6 | 绿色包是否内嵌浏览器 | 默认浏览器打开 / 捆绑 Chromium（体积 +200MB，体验闭环） | 首版用默认浏览器 |
+| # | 问题 | 结论 → 决策条目 |
+|---|------|----------------|
+| Q1 | Gateway / S3 / volcengine / scp 首版是否随 D4 一并禁用？ | **禁用**。代码保留、开关可开 → D5 |
+| Q2 | Windows 构建环境 | **手工脚本先跑通 M2**，M4 再决定流水线 → D7 |
+| Q3 | 数据目录默认位置 | **`%USERPROFILE%\DataViewerData`**（卸载不丢数据）→ D8 |
+| Q4 | 单机登录体验 | **保留登录页 + 记住我**（改动最小）→ D9 |
+| Q5 | 补丁 vs 直接改主仓 | **先 patches，M4 转直改** → D10 |
+| Q6 | 绿色包是否内嵌浏览器 | **首版用默认浏览器** → D11 |
