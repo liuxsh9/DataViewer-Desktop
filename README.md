@@ -8,7 +8,9 @@ DataViewer 的**单机 Windows 版**（路线 B：原生绿色包 + 托盘启动
 
 ## 当前状态
 
-**M0 — 立项与方案讨论中**（2026-08-19）。代码尚未开始，先评审 [docs/plan.md](docs/plan.md) 中的开放问题（Q1-Q6）。
+**立项完成，进入 M0（脚手架）**（2026-08-19）。Q1-Q6 已拍板（ADR D1-D11，仅 D6 待确认）。
+
+> **开工入口**：[docs/kickoff.md](docs/kickoff.md) —— 在本仓对 Claude 说"按 kickoff 开始工作"即可执行 M0。
 
 ## 目录
 
