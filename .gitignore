@@ -1,0 +1,28 @@
+# 上游工作树（clone + 补丁应用产物）
+workspace/
+
+# 构建产物
+dist/
+build/
+*.zip
+*.exe
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+python/
+
+# 前端
+node_modules/
+frontend/dist/
+
+# 日志与本地数据
+logs/
+data/
+*.log
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
