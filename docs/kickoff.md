@@ -5,7 +5,9 @@
 ## 状态快照（2026-08-20，M1 完成、M2 启动中）
 
 - **D6 已拍板（2026-08-20）：禁用**（TrajViz/workbench/labeling worker 首版不打包）。M1 的实施（开关 + gate）即最终形态，无需改动；SampleBrowser "Score Traj" 经核实走 data_versions 本地打分，不受影响（D14 已澄清）。
-- **D7 已拍板（2026-08-20）：GitHub Actions windows-latest**（用户"能走 actions 就走 actions"）。已产出：`scripts/build-win.ps1`（构建）、`scripts/make-source-bundle.sh`（dev box 打包上游源码，实测 6.6M）、`.github/workflows/windows-build.yml`（pytest → build → 冒烟 → artifact）。**已激活（2026-08-20）**：本仓已推 GitHub（liuxsh9/DataViewer-Desktop，gh CLI per-repo credential）；源码包已上传 `<版本>-src` release；触发方式：`gh workflow run windows-build.yml -f version=<版本>`。
+- **D7 已拍板（2026-08-20）：GitHub Actions windows-latest**（用户"能走 actions 就走 actions"）。已产出：`scripts/build-win.ps1`（构建）、`scripts/make-source-bundle.sh`（dev box 打包上游源码）、`.github/workflows/windows-build.yml`（pytest → build → 冒烟 → artifact）+ `windows-pytest-full.yml`（配额控制）。**已激活（2026-08-20）**：本仓已推 GitHub（liuxsh9/DataViewer-Desktop，gh CLI per-repo credential）；源码包经 `<版本>-src` release 分发；触发方式：`gh workflow run windows-build.yml -f version=<版本>`。
+- **Windows CI 实测进度（2026-08-20）**：pytest 平台子集 **226/0/8 全绿**；绿色包构建（uv sync → dist 预构建跳过 npm → 组装 → zip）**跑通**；冒烟与 artifact 上传的修复（robocopy exit-code 泄漏、venv Scripts/ 路径）已推但**未验证**。**当前阻塞：GitHub 计费**（"recent account payments have failed or spending limit"）——需用户处理 GitHub Billing（升级/买分钟/转公开仓）后触发最后一跑。
+- 本轮 CI 迭代修出的问题链（已全部落补丁/脚本）：fcntl/pty import（0010）、cryptography 声明（0011）、锁测试平台化（0012）、manifest 反斜杠键（0013）、CRLF 窗口吸收（0013）、folder_change_status 目录归一化（0016）、runner npm 环境故障（dist 预构建策略）、robocopy exit-code 泄漏、Windows venv Scripts/ 路径。
 - **M2 状态**：Windows CI 骨架就位，等待 repo 上传后首跑；真机冒烟 = 下载 artifact 绿色包在你的 Windows 机器解压验证。
 
 - **M0 完成**（详见 plan.md §7 状态列）：sync 流程 + pytest 基线 + CI 骨架。
