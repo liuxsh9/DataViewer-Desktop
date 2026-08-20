@@ -40,6 +40,20 @@
 | 0008 | Windows 文件语义双平台用例（16 个） | Linux 14 过 2 skip |
 | 0009 | 前端 `CapabilitiesContext` + 全部入口 gate（兜底全 true） | build 绿 |
 
+## M2 真机冒烟清单（Windows 机器，artifact 下载后执行）
+
+1. 下载 GitHub Actions artifact（`DataViewer-Desktop-<版本>-win64` 的 zip），解压到本地（路径含中文/空格应无碍，若异常换纯 ASCII 路径并记录）
+2. 双击 `start.bat` → 浏览器自动打开 http://127.0.0.1:8888 → 用 `admin` / `admin123` 登录（首次运行自动生成 secrets.env；登录后请修改密码）
+3. 核心链路逐项过：
+   - 文件浏览：`%USERPROFILE%\DataViewerData` 下放几个 jsonl 文件，File Explorer 可见
+   - JSONL 查看：打开一个 jsonl（含中文内容）正常渲染
+   - 聚合：对多文件做一次聚合
+   - 格式转换/校验：Convert to ATIF/PanguML（本地，可用）；Validate ATIF（本地，可用）
+   - dataset-stats：对小文件集跑一个统计任务（token 计数走 sentencepiece fallback 或 gigatoken，速度差异属预期）
+4. 外网功能不可见：File Explorer 无 MindForge Push/Pull、S3、Upload from Server、Validation（datalab）、Ask Claude、Pipeline、Traj-Viz、Arena 入口；`GET http://127.0.0.1:8888/api/capabilities` 返回 11 项全 false
+5. 已知限制（首版预期行为）：PanguML/ML1.5 校验不可用（workbench 未打包，入口已隐藏）；多进程用 spawn，首次统计任务启动稍慢属正常
+6. 记录异常：任何 500/白屏/入口残留截图 + `%LOCALAPPDATA%\DataViewerDesktop\logs` 日志，回传给我修
+
 ## 关键环境事实与坑（M2 继续适用）
 
 - **本机是 Linux dev box，无 Windows**；.ps1 脚本只写不跑，Windows 验证走构建机/CI（D7）。
