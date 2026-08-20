@@ -1,0 +1,57 @@
+# DataViewer-Desktop — Windows 全量 pytest（配额控制：手动触发，不进常规构建）
+#
+# windows-build.yml 只跑平台敏感子集 + 全量收集；本 workflow 按需手动触发
+# 全量（约 20 分钟）。Linux 全量在 dev box 每个补丁必跑。
+
+name: windows-pytest-full
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（如 v4.13.0-d1）；源码包需已上传到 <版本>-src release"
+        required: true
+        default: "v4.13.0-d1"
+
+jobs:
+  pytest-full:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout 本仓
+        uses: actions/checkout@v4
+
+      - name: 下载源码包
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ inputs.version }}-src" --pattern "source-*.tar.gz" --output source.tar.gz
+          New-Item -ItemType Directory -Force upstream | Out-Null
+          tar -xzf source.tar.gz -C upstream
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: 后端依赖
+        shell: pwsh
+        run: |
+          Push-Location upstream/backend
+          uv lock
+          uv sync
+          Pop-Location
+
+      - name: 全量 pytest
+        shell: pwsh
+        run: |
+          Push-Location upstream/backend
+          $env:DATA_ROOT = "D:\dv-ci-data"
+          $env:METADATA_DIR = "D:\dv-ci-meta"
+          New-Item -ItemType Directory -Force $env:DATA_ROOT, $env:METADATA_DIR | Out-Null
+          uv run --project . --with pytest python -m pytest tests/ -q --tb=short `
+            --deselect tests/test_format_ops_api.py::TestTaskAccess::test_report_panguml_shape
+          Pop-Location

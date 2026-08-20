@@ -51,15 +51,24 @@ jobs:
           uv sync
           Pop-Location
 
-      - name: 后端 pytest（Windows 真跑，4.8 的 win32-only 用例在此生效）
+      - name: 后端 pytest（全量收集 + 平台敏感子集；配额控制，全量跑 windows-pytest-full）
         shell: pwsh
         run: |
           Push-Location upstream/backend
           $env:DATA_ROOT = "D:\dv-ci-data"
           $env:METADATA_DIR = "D:\dv-ci-meta"
           New-Item -ItemType Directory -Force $env:DATA_ROOT, $env:METADATA_DIR | Out-Null
-          uv run --project . --with pytest python -m pytest tests/ -q --tb=short `
-            --deselect tests/test_format_ops_api.py::TestTaskAccess::test_report_panguml_shape
+          # 1) 全量收集 = 依赖闭包 + import 链验证（2-3 分钟）
+          uv run --project . --with pytest python -m pytest tests/ --collect-only -q
+          # 2) 平台敏感子集真跑（路径/锁/换行/能力开关，几分钟内完成）
+          uv run --project . --with pytest python -m pytest `
+            tests/test_windows_file_semantics.py tests/test_files_safe_path.py `
+            tests/test_config_secrets.py tests/test_system_monitor_windows.py `
+            tests/test_writeback_service.py tests/test_protected_field.py `
+            tests/test_aggregation_core.py tests/test_pangu_to_atif.py `
+            tests/test_folder_visibility_middleware.py `
+            tests/test_capabilities_api.py tests/test_capability_gates.py `
+            -q --tb=short
           Pop-Location
 
       - name: 前端构建 + 组装绿色包

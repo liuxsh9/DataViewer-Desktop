@@ -247,8 +247,12 @@ sync-upstream.sh:
 | 层 | 环境 | 内容 | 频率 |
 |----|------|------|------|
 | 适配验证 | Linux（dev box） | 上游全量 pytest + **强制 spawn 模式**重跑 | 每个补丁 |
-| Windows 验证 | windows-latest（D7 已定） | 桌面版依赖集 pytest + 冒烟 + 打包 | 每次上游基线更新 / PR |
+| Windows 验证 | windows-latest（D7 已定） | **全量收集 + 平台敏感子集 pytest** + 冒烟 + 打包（全量 pytest 独立 workflow 手动触发） | 每次上游基线更新 / PR |
 | 发布 | windows-latest | 出 zip + exe 产物 | 上游 release 后 |
+
+**配额控制（2026-08-20 实测）**：Windows 全量 pytest 单次约 21 分钟，免费配额单日即触顶——
+常规构建只跑全量收集（import 闭包验证）+ 平台敏感子集（约 3 分钟）；
+`windows-pytest-full.yml`（workflow_dispatch）跑全量，用于基线大变更时。
 
 上游源码获取（内网 CodeHub 对 GitHub runner 不可达）：dev box 用
 `scripts/make-source-bundle.sh` 打包「基线 + 补丁 apply 后的完整树」成 tar，上传 GitHub
