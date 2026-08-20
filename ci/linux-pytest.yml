@@ -1,0 +1,81 @@
+# DataViewer-Desktop — Linux 上游 pytest 骨架（占位）
+#
+# 状态: 占位（M0，只写不跑）。流水线形态待 D7（M4）拍板（GitHub Actions
+# windows-latest / 内部构建机）前仅作骨架，届时本文件或迁移至内部 CI。
+#
+# 已知事实与坑（2026-08-20，dev box 实测）:
+# - 上游仓库在华为内网 CodeHub（ssh://git@szv-open.codehub.huawei.com:2222/
+#   innersource/LLMDevKit_G/DataViewer.git），GitHub runner 默认不可达；
+#   UPSTREAM_REPO 需在流水线落地时替换为可访问来源（镜像/归档）。
+# - 上游无 git tag；v4.12.0 = commit 1d2b0df43977b75173d6f95e38385fd6459ce28c。
+# - 后端 requires-python >= 3.12；依赖经 uv（backend/uv.lock）。
+# - 已知既存失败（dev box 同环境复现，非本仓引入）:
+#   tests/test_format_ops_api.py::TestTaskAccess::test_report_panguml_shape
+#   依赖本机 workbench 服务（127.0.0.1:8120）在线，离线时 503。
+#   占位阶段不 deselect（保持基线诚实）；D6/workbench 决策落地后处理。
+
+name: linux-pytest
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: "上游仓库 URL（GitHub runner 需可达）"
+        required: false
+        default: ""
+      upstream_ref:
+        description: "上游基线（tag 或 commit）"
+        required: true
+        default: "1d2b0df43977b75173d6f95e38385fd6459ce28c" # v4.12.0
+
+env:
+  # 占位默认值：内网 CodeHub（见文件头注释，GitHub runner 不可达）
+  UPSTREAM_REPO: ${{ inputs.upstream_repo || 'ssh://git@szv-open.codehub.huawei.com:2222/innersource/LLMDevKit_G/DataViewer.git' }}
+  UPSTREAM_REF: ${{ inputs.upstream_ref }}
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 本仓（拿 patches/）
+        uses: actions/checkout@v4
+        with:
+          path: desktop
+
+      - name: Checkout 上游基线
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ env.UPSTREAM_REF }}
+          path: upstream
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Sync 后端依赖
+        run: uv sync --project upstream/backend
+
+      - name: Apply patches（空栈跳过）
+        run: |
+          shopt -s nullglob
+          patches=(desktop/patches/*.patch)
+          if [[ ${#patches[@]} -gt 0 ]]; then
+            git -C upstream am "${patches[@]}"
+          else
+            echo "patches: 空栈，跳过"
+          fi
+
+      - name: Run pytest
+        env:
+          METADATA_DIR: /tmp/dv-ci/metadata
+          DATA_ROOT: /tmp/dv-ci/data
+        run: |
+          mkdir -p /tmp/dv-ci/{metadata,data}
+          cd upstream/backend
+          # python -m pytest 使 CWD 进 sys.path，flat 包（api/services/...）可解析
+          uv run --project . --with pytest python -m pytest tests/ -q --tb=short
