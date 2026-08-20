@@ -65,7 +65,7 @@ $PythonOut = Join-Path $OutputDir "python"
 New-Item -ItemType Directory -Force -Path $BackendOut, $FrontendOut, $PythonOut | Out-Null
 
 # backend 源码（排除 .venv/缓存/测试无关产物）
-robocopy "$SourceDir\backend" $BackendOut /E /XD .venv __pycache__ tests /XF *.pyc uv.lock > $null
+robocopy "$SourceDir\backend" $BackendOut /E /XD .venv __pycache__ .pytest_cache tests /XF *.pyc uv.lock > $null
 if ($LASTEXITCODE -ge 8) { Fail "robocopy backend 失败: $LASTEXITCODE" }
 
 # frontend 只带 dist
@@ -152,3 +152,7 @@ Compress-Archive -Path (Join-Path $OutputDir "*") -DestinationPath $ZipPath
 Write-Host "[build] 完成: $ZipPath"
 Write-Host "[build] 产物清单:"
 Get-ChildItem -Recurse $OutputDir | Select-Object -First 20 | ForEach-Object { Write-Host ("  " + $_.FullName.Replace($OutputDir, "")) }
+
+# robocopy 成功退出码为 0-7（1 = 有文件被复制），PowerShell 会把最后原生命令的
+# $LASTEXITCODE 泄漏成脚本进程退出码——显式归零，避免 workflow 误判失败。
+exit 0
