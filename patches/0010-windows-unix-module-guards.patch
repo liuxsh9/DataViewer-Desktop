@@ -1,8 +1,8 @@
-From 050af7ed7265aa245e0ea06d1ac145e30eb495e9 Mon Sep 17 00:00:00 2001
+From a82ec3cdab6378bbbf91839dd763dc8b77f73975 Mon Sep 17 00:00:00 2001
 From: DataViewer-Desktop Sync <sync@dataviewer-desktop.local>
 Date: Thu, 20 Aug 2026 13:25:48 +0800
-Subject: [PATCH] fix(desktop): guard Unix-only imports (fcntl/pty/termios) for
- Windows
+Subject: [PATCH 10/15] fix(desktop): guard Unix-only imports
+ (fcntl/pty/termios) for Windows
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

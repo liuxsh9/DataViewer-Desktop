@@ -1,7 +1,7 @@
-From f937f60e43e8b14fbbc987ad534c04d3a82f01f4 Mon Sep 17 00:00:00 2001
+From 1d481695019c2dd88752211bff2b9a4cf1c0154b Mon Sep 17 00:00:00 2001
 From: DataViewer-Desktop Sync <sync@dataviewer-desktop.local>
 Date: Thu, 20 Aug 2026 13:37:44 +0800
-Subject: [PATCH] fix(desktop): declare cryptography in base deps
+Subject: [PATCH 11/15] fix(desktop): declare cryptography in base deps
  (gateway_credentials import)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

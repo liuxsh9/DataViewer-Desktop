@@ -2,7 +2,7 @@
 #
 # 用法（PowerShell 5.1+，需已安装 Python 3.12 与 uv）:
 #   powershell -ExecutionPolicy Bypass -File build-win.ps1 `
-#       -SourceDir C:\path\to\upstream-tree -Version v4.13.0-d1 [-OutputDir C:\out]
+#       -SourceDir C:\path\to\upstream-tree -Version v4.10.1-d1 [-OutputDir C:\out]
 #
 # 流程: 校验源码 → uv 同步后端依赖 → 前端 npm ci + build →
 #       组装绿色目录（backend + frontend/dist + python/ venv + 配置模板 + README）
@@ -10,7 +10,7 @@
 
 param(
     [Parameter(Mandatory=$true)][string]$SourceDir,   # 上游基线 + 补丁 apply 后的源码树
-    [Parameter(Mandatory=$true)][string]$Version,     # 如 v4.13.0-d1
+    [Parameter(Mandatory=$true)][string]$Version,     # 如 v4.10.1-d1
     [string]$OutputDir = "$PSScriptRoot\..\build\$Version"
 )
 

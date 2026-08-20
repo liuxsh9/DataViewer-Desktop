@@ -1,7 +1,7 @@
-From c806b4dcda8e1c60ec465fcf8f1b4aef7e779558 Mon Sep 17 00:00:00 2001
+From f98663616a415f26a5df65f7c88db59988d40456 Mon Sep 17 00:00:00 2001
 From: l00653114 <l00653114@example.com>
 Date: Thu, 20 Aug 2026 11:45:11 +0800
-Subject: [PATCH 8/9] test(desktop): Windows file-semantics regression suite
+Subject: [PATCH 08/15] test(desktop): Windows file-semantics regression suite
  (dual-platform)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

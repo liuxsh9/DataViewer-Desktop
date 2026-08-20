@@ -1,7 +1,7 @@
-From 88e1ee0d29396cd0aa3ece7505bb0a1b055d2781 Mon Sep 17 00:00:00 2001
+From 4d89d5e33e2adbba25b8b8c24a4818121e7816fd Mon Sep 17 00:00:00 2001
 From: l00653114 <l00653114@example.com>
 Date: Thu, 20 Aug 2026 11:45:00 +0800
-Subject: [PATCH 5/9] feat(desktop): split ray/transformers/huggingface_hub
+Subject: [PATCH 05/15] feat(desktop): split ray/transformers/huggingface_hub
  into optional deps
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

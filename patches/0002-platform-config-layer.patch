@@ -1,8 +1,8 @@
-From 1ceac4cec7733742d4888c5d9e56b1eda6b5ead5 Mon Sep 17 00:00:00 2001
+From 05a89cfbb8eabcfa5774a67d8bfe9210fc45194d Mon Sep 17 00:00:00 2001
 From: l00653114 <l00653114@example.com>
 Date: Thu, 20 Aug 2026 11:27:52 +0800
-Subject: [PATCH 2/9] =?UTF-8?q?feat(desktop):=20platform=20config=20layer?=
- =?UTF-8?q?=20=E2=80=94=20secrets=20file=20+=20capability=20switches=20+?=
+Subject: [PATCH 02/15] =?UTF-8?q?feat(desktop):=20platform=20config=20laye?=
+ =?UTF-8?q?r=20=E2=80=94=20secrets=20file=20+=20capability=20switches=20+?=
  =?UTF-8?q?=20path=20helpers?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -21,7 +21,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
  create mode 100644 backend/tests/test_config_secrets.py
 
 diff --git a/backend/config.py b/backend/config.py
-index 7320667..ab19aaa 100644
+index b8622a6..6ff6048 100644
 --- a/backend/config.py
 +++ b/backend/config.py
 @@ -8,6 +8,44 @@ from pathlib import Path
@@ -69,7 +69,7 @@ index 7320667..ab19aaa 100644
  # --- Auto-detected paths ---
  PROJECT_ROOT = Path(__file__).resolve().parent.parent
  BACKEND_DIR = PROJECT_ROOT / "backend"
-@@ -155,6 +193,39 @@ NO_PROXY = os.getenv("NO_PROXY", "")
+@@ -159,6 +197,39 @@ NO_PROXY = os.getenv("NO_PROXY", "")
  # Users registered before this date see it once; users registered on/after never do.
  VIEW_GUIDE_CUTOFF = os.getenv("VIEW_GUIDE_CUTOFF", "2026-08-08")
  
@@ -109,7 +109,7 @@ index 7320667..ab19aaa 100644
  
  def get_db_path(filename: str) -> str:
      """Return the full path for a database file under METADATA_DIR."""
-@@ -166,6 +237,31 @@ def get_data_root() -> str:
+@@ -170,6 +241,31 @@ def get_data_root() -> str:
      return DATA_ROOT
  
  

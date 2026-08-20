@@ -1,7 +1,7 @@
 # 补丁栈（对上游 DataViewer 的适配补丁）
 
 按编号顺序 apply（`scripts/sync-upstream.sh` 自动执行 `git am patches/*.patch`）。
-基线：**v4.13.0 = commit cc71d62**（上游无 git tag）。
+基线：**v4.10.1（git tag）**（2026-08-20 重锁；上游版本线收敛到 4.10.x 后发布，此前 4.11-4.13 的 commit message 版本号已作废）。
 
 | # | 补丁 | 对应 plan.md | 内容 | 状态 |
 |---|------|-------------|------|------|

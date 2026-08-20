@@ -1,7 +1,7 @@
-From 7a87238025645a575afb3d6d51c32bbcdc283503 Mon Sep 17 00:00:00 2001
+From 0898780367c6292ca2d825f329b79befb4c01103 Mon Sep 17 00:00:00 2001
 From: l00653114 <l00653114@example.com>
 Date: Thu, 20 Aug 2026 11:45:11 +0800
-Subject: [PATCH 9/9] feat(desktop): frontend capability gating via
+Subject: [PATCH 09/15] feat(desktop): frontend capability gating via
  /api/capabilities
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

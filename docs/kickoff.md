@@ -9,7 +9,7 @@
 - **M2 状态**：Windows CI 骨架就位，等待 repo 上传后首跑；真机冒烟 = 下载 artifact 绿色包在你的 Windows 机器解压验证。
 
 - **M0 完成**（详见 plan.md §7 状态列）：sync 流程 + pytest 基线 + CI 骨架。
-- **基线**：v4.13.0 = commit `cc71d62`（上游无 tag；用户口头提到的"4.10.0"经查证与仓库不符，已确认跟随 master HEAD）。
+- **基线**：**v4.10.1（git tag，2026-08-20 重锁）**。演进过程：上游最初无 tag（曾临时锁 v4.13.0=cc71d62），同日上游"anchor v4.10.0 — unify code versions"收敛版本线并发布 v4.10.1——用户最初"收敛到 4.10.0"的意图与此吻合。15 个补丁已 rebase 并在 tag 上重放验证（fork/spawn 1008/1/2）。
 - **M1 主体完成**：9 个补丁已入 `patches/`（0001-0009，见 patches/README.md）。重放验证（干净树 apply 全部补丁）：
   - 后端 pytest：fork **921 passed / 1 failed / 2 skipped**；spawn **921 passed / 1 failed / 2 skipped**。唯一失败 = `test_report_panguml_shape`（workbench :8120 离线，环境性既存问题，非补丁引入）。
   - 前端：`npm ci && npm run build` 通过。

@@ -14,7 +14,7 @@ DataViewer 的单机 Windows 版产品化仓。方案全貌见 `docs/plan.md`，
 
 - 本机是 **Linux dev box，无 Windows**。Windows 验证走 CI（windows-latest）或远程 Windows 机；`scripts/` 下的 .ps1 脚本在 Linux 上无法运行，属预期
 - 上游后端测试运行方式（venv、PYTHONPATH、METADATA_DIR 等）见 DataViewer 主仓的既有约定与本机 memory
-- 上游当前版本基线：v4.13.0 = commit cc71d62（2026-08-20；上游无 git tag，版本以 commit message 标注）
+- 上游当前版本基线：v4.10.1（git tag，2026-08-20 重锁；上游版本线已收敛到 4.10.x，"anchor v4.10.0 — unify code versions" 后发布 v4.10.1，此前 4.11-4.13 的 commit message 版本号作废）
 
 ## 工作流
 

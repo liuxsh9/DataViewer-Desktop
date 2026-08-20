@@ -1,7 +1,7 @@
-From 9e91ff0aaf9e9cfebbe3a16e5f14c003bce6c5e2 Mon Sep 17 00:00:00 2001
+From 797f2ab73a770b60f19708dddfa3469a8a15ca14 Mon Sep 17 00:00:00 2001
 From: l00653114 <l00653114@example.com>
 Date: Thu, 20 Aug 2026 11:45:11 +0800
-Subject: [PATCH 7/9] feat(desktop): enforce capability kill switches on
+Subject: [PATCH 07/15] feat(desktop): enforce capability kill switches on
  external-service APIs
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -252,10 +252,10 @@ index 5ade6ca..24f818f 100644
  
  class IngestRequest(BaseModel):
 diff --git a/backend/api/validation.py b/backend/api/validation.py
-index 66a5c38..d08c10d 100644
+index 5af11bc..2b98b7d 100644
 --- a/backend/api/validation.py
 +++ b/backend/api/validation.py
-@@ -47,7 +47,11 @@ from services.validation_preferences import (
+@@ -43,7 +43,11 @@ from services.validation_preferences import (
  )
  
  logger = logging.getLogger(__name__)

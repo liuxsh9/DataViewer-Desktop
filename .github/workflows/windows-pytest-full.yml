@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "版本号（如 v4.13.0-d1）；源码包需已上传到 <版本>-src release"
+        description: "版本号（如 v4.10.1-d1）；源码包需已上传到 <版本>-src release"
         required: true
-        default: "v4.13.0-d1"
+        default: "v4.10.1-d1"
 
 jobs:
   pytest-full:

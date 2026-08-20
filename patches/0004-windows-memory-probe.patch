@@ -1,7 +1,7 @@
-From 46d0562a64e68b981afc8eb4d3fd0bee29209d0f Mon Sep 17 00:00:00 2001
+From 7f84bf6cccc99929a5b1717c98b138f258169102 Mon Sep 17 00:00:00 2001
 From: l00653114 <l00653114@example.com>
 Date: Thu, 20 Aug 2026 11:45:00 +0800
-Subject: [PATCH 4/9] feat(desktop): Windows memory probe branch + load_avg
+Subject: [PATCH 04/15] feat(desktop): Windows memory probe branch + load_avg
  tolerance
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -20,7 +20,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
  create mode 100644 backend/tests/test_system_monitor_windows.py
 
 diff --git a/backend/services/dataset_stats/engine.py b/backend/services/dataset_stats/engine.py
-index 765180c..46fe2a3 100644
+index 26874b1..9169f37 100644
 --- a/backend/services/dataset_stats/engine.py
 +++ b/backend/services/dataset_stats/engine.py
 @@ -20,10 +20,12 @@ import hashlib

@@ -1,7 +1,7 @@
-From 659f14e9d96f7aeb05263da07f85063bb1adfaf1 Mon Sep 17 00:00:00 2001
+From 7b70318ee35c581fa58b39c19b17ca9562b703b1 Mon Sep 17 00:00:00 2001
 From: l00653114 <l00653114@example.com>
 Date: Thu, 20 Aug 2026 11:21:49 +0800
-Subject: [PATCH 1/9] feat(desktop): unify multiprocessing context with
+Subject: [PATCH 01/15] feat(desktop): unify multiprocessing context with
  DV_MP_START_METHOD (spawn-compatible)
 
 Co-Authored-By: Claude <noreply@anthropic.com>
@@ -139,7 +139,7 @@ index 12650bc..06df8e5 100644
                      for future in as_completed(futures):
                          if cancel_event.is_set():
 diff --git a/backend/services/dataset_stats/engine.py b/backend/services/dataset_stats/engine.py
-index 42b150e..765180c 100644
+index 2ec2dce..26874b1 100644
 --- a/backend/services/dataset_stats/engine.py
 +++ b/backend/services/dataset_stats/engine.py
 @@ -29,6 +29,7 @@ from concurrent.futures.process import BrokenProcessPool

@@ -1,7 +1,7 @@
-From 937b9008ad315f05dd41f26e4db1c1b1ee8fd54c Mon Sep 17 00:00:00 2001
+From fdb043a44d0c4a5fd4dd2ed1ffdea9d42415b95c Mon Sep 17 00:00:00 2001
 From: l00653114 <l00653114@example.com>
 Date: Thu, 20 Aug 2026 11:44:52 +0800
-Subject: [PATCH 3/9] feat(desktop): converge /data path joins to
+Subject: [PATCH 03/15] feat(desktop): converge /data path joins to
  config.resolve_abs_path/strip_data_root
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

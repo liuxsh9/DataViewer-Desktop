@@ -1,7 +1,7 @@
-From 4b1a48d9d8af52368e01bfcf88a27c4256ca4738 Mon Sep 17 00:00:00 2001
+From 1432037e118ec0cdd65c268ab279abb294edf63b Mon Sep 17 00:00:00 2001
 From: DataViewer-Desktop Sync <sync@dataviewer-desktop.local>
 Date: Thu, 20 Aug 2026 14:21:00 +0800
-Subject: [PATCH 2/3] test(desktop): platformize POSIX-only expectations
+Subject: [PATCH 14/15] test(desktop): platformize POSIX-only expectations
  (config/safe_path/validate_path)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

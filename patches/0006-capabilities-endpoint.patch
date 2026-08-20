@@ -1,8 +1,8 @@
-From 8b2110da2fdc183f0a7cc013edbdcc1693bcc37a Mon Sep 17 00:00:00 2001
+From ef4f4e3594968e005a47f6d3844d29fe34f23e08 Mon Sep 17 00:00:00 2001
 From: l00653114 <l00653114@example.com>
 Date: Thu, 20 Aug 2026 11:45:11 +0800
-Subject: [PATCH 6/9] feat(desktop): GET /api/capabilities + require_capability
- gate helper
+Subject: [PATCH 06/15] feat(desktop): GET /api/capabilities +
+ require_capability gate helper
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -70,19 +70,19 @@ index 0000000..f386e4d
 +            )
 +    return _guard
 diff --git a/backend/main.py b/backend/main.py
-index 33a5cc4..a030ca2 100644
+index fdd8d4b..d8b97bd 100644
 --- a/backend/main.py
 +++ b/backend/main.py
 @@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
  from fastapi import FastAPI
  from fastapi.middleware.cors import CORSMiddleware
  from fastapi.staticfiles import StaticFiles
--from api import files, system, s3, validation, hf_download, network, parquet, metadata, metadata_schema, dataset_builder, distillation, claude_terminal, auth, notes, copy_tasks, filter_tasks, models, feedback, folder_lock, config_management, pilot, quality_check, token_calculator, spot_check, users, audit, eval_analysis, system_monitor, notifications, personal_folder, folder_visibility, ask_claude, claude_chat, data_versions, labeling, trajectory, arena, content, trajlens, aggregation, api_token, gateway_push, format_ops, dataset_stats
-+from api import files, system, s3, validation, hf_download, network, parquet, metadata, metadata_schema, dataset_builder, distillation, claude_terminal, auth, notes, copy_tasks, filter_tasks, models, feedback, folder_lock, config_management, pilot, quality_check, token_calculator, spot_check, users, audit, eval_analysis, system_monitor, notifications, personal_folder, folder_visibility, ask_claude, claude_chat, data_versions, labeling, trajectory, arena, content, trajlens, aggregation, api_token, gateway_push, format_ops, dataset_stats, capabilities
+-from api import files, system, s3, validation, hf_download, network, parquet, metadata, metadata_schema, dataset_builder, distillation, claude_terminal, auth, notes, copy_tasks, filter_tasks, models, feedback, folder_lock, config_management, pilot, quality_check, token_calculator, spot_check, users, audit, eval_analysis, system_monitor, notifications, personal_folder, folder_visibility, ask_claude, claude_chat, data_versions, labeling, trajectory, arena, content, trajlens, aggregation, api_token, token_ops, gateway_push, format_ops, dataset_stats
++from api import files, system, s3, validation, hf_download, network, parquet, metadata, metadata_schema, dataset_builder, distillation, claude_terminal, auth, notes, copy_tasks, filter_tasks, models, feedback, folder_lock, config_management, pilot, quality_check, token_calculator, spot_check, users, audit, eval_analysis, system_monitor, notifications, personal_folder, folder_visibility, ask_claude, claude_chat, data_versions, labeling, trajectory, arena, content, trajlens, aggregation, api_token, token_ops, gateway_push, format_ops, dataset_stats, capabilities
  from middleware.auth_middleware import JWTAuthMiddleware
  from middleware.auto_audit import AutoAuditMiddleware
  from middleware.folder_visibility import FolderVisibilityMiddleware
-@@ -300,6 +300,7 @@ app.include_router(api_token.router, prefix="/api/token-auth", tags=["token-auth
+@@ -301,6 +301,7 @@ app.include_router(token_ops.router, prefix="/api/token-auth/ops", tags=["token-
  app.include_router(gateway_push.router, prefix="/api/gateway-push", tags=["gateway-push"])  # PanguML → ATIF → MindForge Gateway
  app.include_router(format_ops.router, prefix="/api/format-ops", tags=["format-ops"])  # Standalone convert + format validation
  app.include_router(dataset_stats.router, prefix="/api/dataset-stats", tags=["dataset-stats"])  # Training-data stats dashboard

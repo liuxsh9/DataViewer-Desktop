@@ -26,7 +26,8 @@ BASELINE="$1"
 # 1. clone 或 fetch（本地 file:// clone，不走网络）
 if [[ -d "$WORKTREE_DIR/.git" ]]; then
   echo "[sync] fetch 上游: $UPSTREAM_URL"
-  git -C "$WORKTREE_DIR" fetch --tags "$UPSTREAM_URL"
+  # --force: 上游 tag 会移动/回退（如版本线收敛），本地同名 tag 直接覆盖
+  git -C "$WORKTREE_DIR" fetch --tags --force "$UPSTREAM_URL"
 else
   echo "[sync] clone 上游: $UPSTREAM_URL"
   mkdir -p "$WORKSPACE_DIR"
