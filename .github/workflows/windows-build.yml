@@ -95,6 +95,8 @@ jobs:
           $env:VOLCENGINE_ENABLED = "false"; $env:SCP_ENABLED = "false"
           $env:QUALITY_RAY_ENABLED = "false"; $env:TRAJ_VIZ_ENABLED = "false"
           $env:WORKBENCH_ENABLED = "false"
+          # Windows 控制台默认 cp1252，源码有 Unicode 顶层 print（如 pilot.py ✓）会崩
+          $env:PYTHONUTF8 = "1"
           # Windows venv 的 python 在 Scripts/ 子目录；重定向输出便于定位启动崩溃
           $proc = Start-Process -FilePath "..\python\Scripts\python.exe" `
             -ArgumentList "-m","uvicorn","main:app","--port","8888" `

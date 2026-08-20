@@ -138,6 +138,8 @@ set QUALITY_RAY_ENABLED=false
 set TRAJ_VIZ_ENABLED=false
 set WORKBENCH_ENABLED=false
 set PORT=8888
+REM Windows 控制台默认 cp1252，源码有 Unicode 顶层 print 会崩（如 pilot.py ✓）
+set PYTHONUTF8=1
 start "" /b "%APP_DIR%python\Scripts\python.exe" -m uvicorn main:app --app-dir "%APP_DIR%backend" --host 127.0.0.1 --port %PORT%
 timeout /t 3 /nobreak >nul
 start http://127.0.0.1:%PORT%
