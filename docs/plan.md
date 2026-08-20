@@ -16,15 +16,15 @@
 | D3 | 代码模型 | **单一代码库**：业务代码只存在于 DataViewer 主仓；本仓是产品化/打包层（补丁栈 + 启动器 + 安装器 + CI + 文档）。适配改动以 patch 形式在本仓迭代，**最终目标提交回主仓** | 已定 |
 | D4 | 首版功能裁剪 | 禁用：**ray（分布式质检）、datalab 一键质检、HF 下载、arena 导入、claude API/CLI**。代码保留、后端开关关闭、前端入口隐藏 | 已定 |
 | D5 | Gateway/S3/volcengine/scp | 首版随 D4 一并禁用（Q1 拍板）：代码保留、后端开关关闭、入口隐藏，后续随时可开 | 已定 2026-08-19 |
-| D6 | TrajViz / workbench / labeling worker | 首版不打包、入口禁用；作为后续可选组件（P2 再评估）。**M1 已按"首版禁用"方向实施**（traj_viz/workbench 开关 + 前端 gate），开关可逆，待用户最终拍板 | 待确认（按禁用方向实施，2026-08-20） |
-| D7 | 构建环境（Q2） | M2 阶段用手工脚本（build-win.ps1）在 Windows 开发机跑通；M4 再决定流水线（GitHub Actions windows-latest / 内部构建机） | 已定 2026-08-19 |
+| D6 | TrajViz / workbench / labeling worker | 首版不打包、入口禁用；作为后续可选组件（P2 再评估）。M1 已实施：`traj_viz`/`workbench` 开关 + 前端 gate + `api/trajectory.py` 全路由 gate（含 viz serve/labeling/filterable-samples） | **已定 2026-08-20：禁用** |
+| D7 | 构建环境（Q2） | **GitHub Actions windows-latest**（2026-08-20 用户拍板"能走 actions 就走 actions"）。构建脚本 build-win.ps1 手工/CI 共用；本仓需建 GitHub repo；上游内网 CodeHub 对 runner 不可达，源码经「源码包」传入（scripts/make-source-bundle.sh 打包，见 §6.2） | 已定 2026-08-20（原 08-19 为"先手工脚本"） |
 | D8 | 数据目录（Q3） | `%USERPROFILE%\DataViewerData`（DATA_ROOT）；元数据/密钥/日志在 `%LOCALAPPDATA%\DataViewerDesktop`；卸载不丢数据 | 已定 2026-08-19 |
 | D9 | 登录体验（Q4） | 保留 admin 登录页 + "记住我"（localStorage 持久化 token），改动最小 | 已定 2026-08-19 |
 | D10 | 补丁工作流（Q5） | 先 `patches/` 迭代（主仓发布节奏不受影响）；M4 起转"主仓直接开分支开发，本仓只做打包" | 已定 2026-08-19 |
 | D11 | 浏览器（Q6） | 首版用系统默认浏览器；捆绑 Chromium 列为 P2 可选 | 已定 2026-08-19 |
 | D12 | capability 契约（M1 实施） | `GET /api/capabilities` 返回**扁平 JSON**（11 键）；前端启动 fetch 一次，**失败兜底全 true**（上游行为不变）；开关关闭 = 前端入口不可见 + 后端 503 "X is unavailable in this deployment" | 已定 2026-08-20 |
 | D13 | format-ops 归属（M1 实施） | convert / validate-atif 是**本地能力**（`config.py` "Pure local capabilities"），**不 gate**；validate-panguml/ml15 依赖 workbench，挂 `workbench` 开关（后端另有 `wc.health()` 动态 503）；"Validation" 一键质检按钮属 datalab-platform，挂 `datalab` | 已定 2026-08-20 |
-| D14 | trajectory.py 归属（M1 实施） | `api/trajectory.py` 全路由（viz serve/labeling/filterable-samples）归 `traj_viz` 开关；SampleBrowser 的 Traj 前端入口未 gate 属已知不一致，D6 拍板后统一 | 已定 2026-08-20 |
+| D14 | trajectory.py 归属（M1 实施） | `api/trajectory.py` 全路由（viz serve/labeling/filterable-samples）归 `traj_viz` 开关。**2026-08-20 核实**：SampleBrowser 的 "Score Traj" 走 `dataVersionApi.backfillTrajectoryScores`（`api/data_versions.py`，本地 trajectory_analyzer 打分），**不经过** `api/trajectory.py`，无 gate 冲突，保留可用 | 已定 2026-08-20 |
 | D15 | zip 编码与 gateway 403（M1 暂缓） | ① zip 无 UTF-8 flag 的 GBK 成员名乱码（`api/files.py:3017`）：修会改变 Linux 现有行为，留作上游 PR 候选；② `GATEWAY_PUSH_ENABLED` 既有强制返回 403 且为 import 时快照，与 capability 体系 503 语义不一致：留待上游化时统一 | 已定 2026-08-20 |
 
 ---
@@ -246,11 +246,14 @@ sync-upstream.sh:
 
 | 层 | 环境 | 内容 | 频率 |
 |----|------|------|------|
-| 适配验证 | Linux（现有） | 上游全量 pytest + **强制 spawn 模式**重跑 | 每个补丁 |
-| Windows 验证 | windows-latest | 桌面版依赖集 pytest + 冒烟 + 打包 | 每次上游 tag / PR |
+| 适配验证 | Linux（dev box） | 上游全量 pytest + **强制 spawn 模式**重跑 | 每个补丁 |
+| Windows 验证 | windows-latest（D7 已定） | 桌面版依赖集 pytest + 冒烟 + 打包 | 每次上游基线更新 / PR |
 | 发布 | windows-latest | 出 zip + exe 产物 | 上游 release 后 |
 
-构建环境按 D7：M2 手工脚本跑通后再决定流水线。
+上游源码获取（内网 CodeHub 对 GitHub runner 不可达）：dev box 用
+`scripts/make-source-bundle.sh` 打包「基线 + 补丁 apply 后的完整树」成 tar，上传 GitHub
+release asset / workflow artifact；`ci/windows-build.yml` 以 `SOURCE_ARCHIVE_URL` 输入接收。
+后续可评估在 GitHub 建上游 mirror（需 push 凭据）替代打包。
 
 ---
 
@@ -277,7 +280,7 @@ sync-upstream.sh:
 | capability 前端改造面大（File Explorer 入口分散） | UI 改动多 | 先做入口盘点清单，统一 gate 组件，一处注册 | 提前盘点 |
 | 个人 PC 内存（16-32GB）跑不动大统计 | 体验差 | 已有自适应 workers + 内存守卫；文档注明建议配置 | 有兜底 |
 | 依赖裁剪误伤功能（import 图未完全盘点） | 启动失败 | M1 每拆一个依赖重跑全量 pytest + import 扫描脚本 | 流程保证 |
-| 内网环境构建 Windows 产物 | 流水线难落地 | Q2 拍板：GitHub Actions windows runner 或内部 Windows 机 + 本地脚本 | 待确认 |
+| 内网环境构建 Windows 产物 | 流水线难落地 | 2026-08-20 拍板：**GitHub Actions windows-latest**（D7）；上游源码经源码包传入（见 §6.2）；待用户建 GitHub repo | ✅ 已定 |
 
 ---
 

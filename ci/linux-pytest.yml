@@ -1,18 +1,20 @@
 # DataViewer-Desktop — Linux 上游 pytest 骨架（占位）
 #
-# 状态: 占位（M0，只写不跑）。流水线形态待 D7（M4）拍板（GitHub Actions
-# windows-latest / 内部构建机）前仅作骨架，届时本文件或迁移至内部 CI。
+# 状态: 骨架（M0 建立，未在 GitHub 上实际运行过）。D7 已于 2026-08-20 拍板
+# GitHub Actions（windows-latest），本文件为 Linux 适配验证层，待本仓建好
+# GitHub repo 后随 windows-build.yml 一起激活。
 #
 # 已知事实与坑（2026-08-20，dev box 实测）:
 # - 上游仓库在华为内网 CodeHub（ssh://git@szv-open.codehub.huawei.com:2222/
 #   innersource/LLMDevKit_G/DataViewer.git），GitHub runner 默认不可达；
-#   UPSTREAM_REPO 需在流水线落地时替换为可访问来源（镜像/归档）。
+#   UPSTREAM_REPO 需替换为可访问来源（镜像/源码包，见 §6.2 与 make-source-bundle.sh）。
 # - 上游无 git tag；v4.13.0 = commit cc71d62（上游版本以 commit message 标注）。
-# - 后端 requires-python >= 3.12；依赖经 uv（backend/uv.lock）。
+# - 后端 requires-python >= 3.12；依赖经 uv。补丁 0005 改过 pyproject 但
+#   uv.lock 未更新（dev box 无 uv）——CI 用 `uv sync`（非 --frozen）或先 `uv lock`。
 # - 已知既存失败（dev box 同环境复现，非本仓引入）:
 #   tests/test_format_ops_api.py::TestTaskAccess::test_report_panguml_shape
-#   依赖本机 workbench 服务（127.0.0.1:8120）在线，离线时 503。
-#   占位阶段不 deselect（保持基线诚实）；D6/workbench 决策落地后处理。
+#   依赖 workbench 服务（127.0.0.1:8120）在线，离线时 503。
+#   D6 已定 workbench 首版禁用 → CI 上 --deselect 该用例（见 windows-build.yml 做法）。
 
 name: linux-pytest
 
@@ -78,4 +80,6 @@ jobs:
           mkdir -p /tmp/dv-ci/{metadata,data}
           cd upstream/backend
           # python -m pytest 使 CWD 进 sys.path，flat 包（api/services/...）可解析
-          uv run --project . --with pytest python -m pytest tests/ -q --tb=short
+          # 既存失败（workbench 离线，D6 已定首版禁用）：deselect 保持 CI 绿
+          uv run --project . --with pytest python -m pytest tests/ -q --tb=short \
+            --deselect tests/test_format_ops_api.py::TestTaskAccess::test_report_panguml_shape

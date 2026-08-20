@@ -1,0 +1,111 @@
+# DataViewer-Desktop — Windows 构建 + 冒烟（D7 已定 GitHub Actions windows-latest）
+#
+# 上游源码获取：内网 CodeHub 对 runner 不可达，dev box 用
+# scripts/make-source-bundle.sh 打包源码 tar 后上传，workflow_dispatch 传
+# source_archive_url。后续可评估 GitHub mirror 方案。
+#
+# 已知失败（环境性，与补丁无关）：test_format_ops_api.py::TestTaskAccess::
+# test_report_panguml_shape 依赖 workbench :8120 在线，CI 无 workbench，
+# 用 --deselect 明确排除（Linux 侧跑全量时同样存在该失败）。
+
+name: windows-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_archive_url:
+        description: "源码包下载 URL（make-source-bundle.sh 产物）"
+        required: true
+      version:
+        description: "版本号（如 v4.13.0-d1）"
+        required: true
+        default: "v4.13.0-d1"
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout 本仓（拿脚本）
+        uses: actions/checkout@v4
+
+      - name: 下载源码包
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "${{ inputs.source_archive_url }}" -OutFile source.tar.gz
+          New-Item -ItemType Directory -Force upstream | Out-Null
+          tar -xzf source.tar.gz -C upstream
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: 后端依赖（Windows venv + uv lock 对齐）
+        shell: pwsh
+        run: |
+          Push-Location upstream/backend
+          uv lock
+          uv sync --extra none
+          Pop-Location
+
+      - name: 后端 pytest（Windows 真跑，4.8 的 win32-only 用例在此生效）
+        shell: pwsh
+        run: |
+          Push-Location upstream/backend
+          $env:DATA_ROOT = "D:\dv-ci-data"
+          $env:METADATA_DIR = "D:\dv-ci-meta"
+          New-Item -ItemType Directory -Force $env:DATA_ROOT, $env:METADATA_DIR | Out-Null
+          uv run --project . --with pytest python -m pytest tests/ -q --tb=short `
+            --deselect tests/test_format_ops_api.py::TestTaskAccess::test_report_panguml_shape
+          Pop-Location
+
+      - name: 前端构建 + 组装绿色包
+        shell: pwsh
+        run: |
+          .\scripts\build-win.ps1 -SourceDir upstream -Version "${{ inputs.version }}" -OutputDir "build\${{ inputs.version }}"
+
+      - name: 冒烟（起服 → health → capabilities → 静态页）
+        shell: pwsh
+        run: |
+          Push-Location "build\${{ inputs.version }}\backend"
+          $env:DATA_ROOT = "D:\dv-ci-data"
+          $env:METADATA_DIR = "D:\dv-ci-meta"
+          $env:JWT_SECRET_KEY = "ci-smoke-secret"
+          $env:ADMIN_PASSWORD = "ci-smoke-password"
+          $env:GATEWAY_PUSH_ENABLED = "false"; $env:DATALAB_ENABLED = "false"
+          $env:HF_ENABLED = "false"; $env:ARENA_ENABLED = "false"
+          $env:CLAUDE_ENABLED = "false"; $env:S3_ENABLED = "false"
+          $env:VOLCENGINE_ENABLED = "false"; $env:SCP_ENABLED = "false"
+          $env:QUALITY_RAY_ENABLED = "false"; $env:TRAJ_VIZ_ENABLED = "false"
+          $env:WORKBENCH_ENABLED = "false"
+          $proc = Start-Process -FilePath "..\python\python.exe" `
+            -ArgumentList "-m","uvicorn","main:app","--port","8888" -PassThru -NoNewWindow
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 60; $i++) {
+              try { $r = Invoke-WebRequest -Uri "http://127.0.0.1:8888/api/health" -TimeoutSec 2; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}
+              Start-Sleep -Seconds 1
+            }
+            if (-not $ok) { throw "health 超时" }
+            $caps = (Invoke-WebRequest -Uri "http://127.0.0.1:8888/api/capabilities").Content | ConvertFrom-Json
+            $off = @("gateway","datalab","hf","arena","claude","s3","volcengine","scp","ray_quality","traj_viz","workbench")
+            foreach ($k in $off) { if ($caps.$k) { throw "capability 应为 false: $k" } }
+            $idx = Invoke-WebRequest -Uri "http://127.0.0.1:8888/" -TimeoutSec 5
+            if ($idx.StatusCode -ne 200 -or $idx.Content -notmatch "DataViewer") { throw "静态首页异常" }
+            Write-Host "[smoke] OK: health + capabilities(11 off) + 静态首页"
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+          Pop-Location
+
+      - name: 上传产物（绿色包 zip）
+        uses: actions/upload-artifact@v4
+        with:
+          name: DataViewer-Desktop-${{ inputs.version }}-win64
+          path: build/${{ inputs.version }}.zip

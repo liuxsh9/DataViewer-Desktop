@@ -2,15 +2,19 @@
 
 ---
 
-## 状态快照（2026-08-20，M1 完成）
+## 状态快照（2026-08-20，M1 完成、M2 启动中）
+
+- **D6 已拍板（2026-08-20）：禁用**（TrajViz/workbench/labeling worker 首版不打包）。M1 的实施（开关 + gate）即最终形态，无需改动；SampleBrowser "Score Traj" 经核实走 data_versions 本地打分，不受影响（D14 已澄清）。
+- **D7 已拍板（2026-08-20）：GitHub Actions windows-latest**（用户"能走 actions 就走 actions"）。已产出：`scripts/build-win.ps1`（构建）、`scripts/make-source-bundle.sh`（dev box 打包上游源码，实测 6.6M）、`ci/windows-build.yml`（pytest → build → 冒烟 → artifact）。**激活前置（需用户）**：① 本仓建 GitHub repo 并推送；② 把 `make-source-bundle.sh` 产物上传到 GitHub release，触发 workflow_dispatch 填 URL。
+- **M2 状态**：Windows CI 骨架就位，等待 repo 上传后首跑；真机冒烟 = 下载 artifact 绿色包在你的 Windows 机器解压验证。
 
 - **M0 完成**（详见 plan.md §7 状态列）：sync 流程 + pytest 基线 + CI 骨架。
 - **基线**：v4.13.0 = commit `cc71d62`（上游无 tag；用户口头提到的"4.10.0"经查证与仓库不符，已确认跟随 master HEAD）。
 - **M1 主体完成**：9 个补丁已入 `patches/`（0001-0009，见 patches/README.md）。重放验证（干净树 apply 全部补丁）：
   - 后端 pytest：fork **921 passed / 1 failed / 2 skipped**；spawn **921 passed / 1 failed / 2 skipped**。唯一失败 = `test_report_panguml_shape`（workbench :8120 离线，环境性既存问题，非补丁引入）。
   - 前端：`npm ci && npm run build` 通过。
-- **遗留事项**（M2 前处理）：D6 待用户拍板（M1 已按"首版禁用"实施，可逆）；Windows CI 验证（D7/M2）；uv.lock 失配需构建机补 `uv lock`；`patches/` 上游化节奏（D10）。
-- **下一步（M2 Windows 冒烟）**：见 plan.md §6.1 构建步骤与 §7 M2 行。前置：D7 的 Windows 构建环境（手工脚本 build-win.ps1 在 Windows 开发机跑通）。
+- **遗留事项**（M2 中处理）：uv.lock 失配（build-win.ps1 已内置 `uv lock` 步骤处理）；`patches/` 上游化节奏（D10，M4）。
+- **下一步（M2 Windows 冒烟）**：激活 windows-build.yml（见状态快照的前置）→ CI 首跑 → 真机解压冒烟（浏览/JSONL/聚合/转换/校验/dataset-stats 小任务；外网功能不可见）。
 
 ## M0 执行记录（留档）
 
