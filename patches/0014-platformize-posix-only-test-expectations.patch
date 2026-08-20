@@ -1,0 +1,130 @@
+From 4b1a48d9d8af52368e01bfcf88a27c4256ca4738 Mon Sep 17 00:00:00 2001
+From: DataViewer-Desktop Sync <sync@dataviewer-desktop.local>
+Date: Thu, 20 Aug 2026 14:21:00 +0800
+Subject: [PATCH 2/3] test(desktop): platformize POSIX-only expectations
+ (config/safe_path/validate_path)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- config 路径助手断言改属性式/运行时构造
+- safe_path 期望经 _resolved_root/_expected 镜像算法（模块属性调用保证 monkeypatch 命中）
+- validate_path 的 realpath mock 忠实化为 normpath
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/tests/test_config_secrets.py    | 14 ++++++++----
+ backend/tests/test_files_safe_path.py   | 30 ++++++++++++++++++++-----
+ backend/tests/test_writeback_service.py |  5 ++++-
+ 3 files changed, 38 insertions(+), 11 deletions(-)
+
+diff --git a/backend/tests/test_config_secrets.py b/backend/tests/test_config_secrets.py
+index 6553ae7..311c332 100644
+--- a/backend/tests/test_config_secrets.py
++++ b/backend/tests/test_config_secrets.py
+@@ -48,16 +48,22 @@ def test_secrets_loaded_at_import_time(tmp_path):
+ 
+ def test_resolve_abs_path_strips_leading_separators(monkeypatch):
+     monkeypatch.setattr(config, "DATA_ROOT", "/tmp/dv-root")
+-    assert config.resolve_abs_path("a/b.jsonl") == "/tmp/dv-root/a/b.jsonl"
+-    assert config.resolve_abs_path("/a/b.jsonl") == "/tmp/dv-root/a/b.jsonl"
++    expected = os.path.normpath(os.path.join("/tmp/dv-root", "a", "b.jsonl"))
++    assert config.resolve_abs_path("a/b.jsonl") == expected
++    assert config.resolve_abs_path("/a/b.jsonl") == expected
+ 
+ 
+ def test_strip_data_root_roundtrip(monkeypatch):
+     monkeypatch.setattr(config, "DATA_ROOT", "/tmp/dv-root")
+-    assert config.strip_data_root("/tmp/dv-root/a/b.jsonl") == "a/b.jsonl"
++    rel = os.path.join("a", "b.jsonl")
++    abs_path = config.resolve_abs_path(rel)
++    # The root itself maps to "".
+     assert config.strip_data_root("/tmp/dv-root") == ""
++    # Round trip: absolute -> root-relative -> absolute reproduces the input.
++    assert config.strip_data_root(abs_path) == rel
++    assert config.resolve_abs_path(config.strip_data_root(abs_path)) == os.path.normpath(abs_path)
+     # Outside DATA_ROOT: returned unchanged (callers keep their guards).
+-    assert config.strip_data_root("/other/x") == "/other/x"
++    assert config.strip_data_root("/other/x") == os.path.normpath("/other/x")
+ 
+ 
+ def test_env_bool_parsing(monkeypatch):
+diff --git a/backend/tests/test_files_safe_path.py b/backend/tests/test_files_safe_path.py
+index 1128c56..31b1fb2 100644
+--- a/backend/tests/test_files_safe_path.py
++++ b/backend/tests/test_files_safe_path.py
+@@ -11,30 +11,48 @@ from pathlib import Path
+ 
+ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ 
++import api.files
+ from api.files import safe_path
+ 
+ 
++def _resolved_root() -> Path:
++    """DATA_ROOT in native notation, resolved exactly as safe_path resolves it."""
++    return Path(api.files.get_data_root()).resolve()
++
++
++def _expected(rel: str) -> Path:
++    """Expected safe_path result for a root-relative path."""
++    return (_resolved_root() / rel).resolve()
++
++
+ def test_relative_path_unchanged(monkeypatch):
+     monkeypatch.setattr("api.files.get_data_root", lambda: "/data")
+-    assert safe_path("s3_data/a/b") == Path("/data/s3_data/a/b")
+-    assert safe_path("/s3_data/a/b") == Path("/data/s3_data/a/b")
++    expected = _expected("s3_data/a/b")
++    assert safe_path("s3_data/a/b") == expected
++    assert safe_path("/s3_data/a/b") == expected
+ 
+ 
+ def test_data_root_absolute_path_is_not_double_rooted(monkeypatch):
+     monkeypatch.setattr("api.files.get_data_root", lambda: "/data")
+-    assert safe_path("/data/s3_data/a/b") == Path("/data/s3_data/a/b")
++    root = _resolved_root()
++    expected = _expected("s3_data/a/b")
++    # DATA_ROOT-absolute (native notation) and relative forms must agree —
++    # never root/root/... .
++    assert safe_path(str(root) + "/s3_data/a/b") == expected
++    assert safe_path("s3_data/a/b") == expected
+ 
+ 
+ def test_data_root_itself(monkeypatch):
+     monkeypatch.setattr("api.files.get_data_root", lambda: "/data")
+-    assert safe_path("/data") == Path("/data")
+-    assert safe_path("") == Path("/data")
++    root = _resolved_root()
++    assert safe_path("") == root
++    assert safe_path(str(root)) == root
+ 
+ 
+ def test_absolute_path_outside_root_keeps_legacy_semantics(monkeypatch):
+     # Not under DATA_ROOT: legacy behavior treats it as root-relative.
+     monkeypatch.setattr("api.files.get_data_root", lambda: "/data")
+-    assert safe_path("/etc/passwd") == Path("/data/etc/passwd")
++    assert safe_path("/etc/passwd") == _expected("etc/passwd")
+ 
+ 
+ def test_traversal_is_rejected(monkeypatch):
+diff --git a/backend/tests/test_writeback_service.py b/backend/tests/test_writeback_service.py
+index 0eeb9ee..f29f474 100644
+--- a/backend/tests/test_writeback_service.py
++++ b/backend/tests/test_writeback_service.py
+@@ -84,8 +84,11 @@ def _make_result_dict():
+ def test_validate_path_inside_data_root():
+     """Test that a path inside DATA_ROOT is valid."""
+     with patch('services.writeback_service.DATA_ROOT', '/data'):
++        # realpath's real contract is to return the platform-native
++        # normalized form, so the mock must normpath too (on Windows os.sep
++        # is '\\', which would otherwise break the startswith check).
+         with patch('services.writeback_service.os.path.realpath',
+-                   side_effect=lambda p: p):
++                   side_effect=lambda p: os.path.normpath(p)):
+             result = _validate_path('/data/some_folder/file.jsonl')
+     assert result is None
+ 
+-- 
+2.43.0
+
