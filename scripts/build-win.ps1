@@ -33,7 +33,8 @@ Write-Host "[build] 输出: $OutputDir"
 Write-Host "[build] uv 同步后端依赖..."
 Push-Location "$SourceDir\backend"
 uv lock
-uv sync --extra none
+# 默认只装 base 依赖（ray/hf 等 optional extras 不装 = 桌面依赖集）
+uv sync
 Pop-Location
 
 # 2. 前端构建（同源部署，无域名依赖）

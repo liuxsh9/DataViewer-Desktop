@@ -159,7 +159,7 @@ DataViewerDesktop/
 | `opencc` / `pyarrow` / `sentencepiece` / `pandas` / `numpy` | 硬依赖 | 均有官方 Windows wheel，保留 | — |
 | `uvicorn[standard]` | uvloop Linux only | Windows 自动回退 asyncio，保留 | — |
 
-- 验收：`uv sync --extra none`（新 profiles 方案）在 Windows 上可启动全量 API；上游 Linux 全量依赖行为不变
+- 验收：`uv sync`（optional extras 默认不装，即桌面依赖集）在 Windows 上可启动全量 API；上游 Linux 全量依赖行为不变
 - **注意（M1 已实施）**：pyproject 已改（ray/huggingface_hub 移 optional、transformers 移除）但 uv.lock 未同步更新（本机无 uv）——构建机需 `uv sync`（非 frozen）或补跑 `uv lock` 后提交新锁
 
 ### 4.5 能力端点与前端入口隐藏（F12/F13）

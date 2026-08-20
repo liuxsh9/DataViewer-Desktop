@@ -47,7 +47,8 @@ jobs:
         run: |
           Push-Location upstream/backend
           uv lock
-          uv sync --extra none
+          # 默认只装 base 依赖（ray/hf 等 optional extras 不装 = 桌面依赖集）
+          uv sync
           Pop-Location
 
       - name: 后端 pytest（Windows 真跑，4.8 的 win32-only 用例在此生效）
