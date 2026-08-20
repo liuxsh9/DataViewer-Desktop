@@ -1,0 +1,146 @@
+From 050af7ed7265aa245e0ea06d1ac145e30eb495e9 Mon Sep 17 00:00:00 2001
+From: DataViewer-Desktop Sync <sync@dataviewer-desktop.local>
+Date: Thu, 20 Aug 2026 13:25:48 +0800
+Subject: [PATCH] fix(desktop): guard Unix-only imports (fcntl/pty/termios) for
+ Windows
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- writeback_service / folder_visibility_manager: flock 在 Windows 无等价物，
+  单机单用户场景锁降级为 no-op（os.replace 原子写仍保证不撕裂）
+- claude_terminal: pty/termios/fcntl 容忍导入，会话入口明确 503
+  （桌面版 claude 本就禁用；开关可逆时 Windows 上得到清晰错误）
+- Linux 行为不变：fork/spawn 全量 921/1/2
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/api/claude_terminal.py                | 17 ++++++++++++++---
+ backend/services/folder_visibility_manager.py | 10 +++++++++-
+ backend/services/writeback_service.py         | 12 +++++++++++-
+ 3 files changed, 34 insertions(+), 5 deletions(-)
+
+diff --git a/backend/api/claude_terminal.py b/backend/api/claude_terminal.py
+index a54da1e..953af5b 100644
+--- a/backend/api/claude_terminal.py
++++ b/backend/api/claude_terminal.py
+@@ -12,11 +12,14 @@ import json
+ import signal
+ from datetime import datetime
+ from pathlib import Path
+-import pty
++try:
++    import pty
++    import termios
++    import fcntl
++except ImportError:  # Windows: no PTY modules. claude terminal is desktop-disabled (CLAUDE_ENABLED=false).
++    pty = termios = fcntl = None
+ import select
+-import termios
+ import struct
+-import fcntl
+ import jwt
+ 
+ from api.capabilities import require_capability
+@@ -165,6 +168,9 @@ async def start_claude_session(working_dir: str, mode: str = 'new') -> dict:
+ 
+     Returns session data including the process handle
+     """
++    if pty is None:
++        raise HTTPException(status_code=503,
++                            detail="terminal is unavailable on this platform")
+     # Check max sessions limit
+     if len(active_sessions) >= CLAUDE_TERMINAL_MAX_SESSIONS:
+         # Clean up inactive sessions first
+@@ -307,6 +313,11 @@ async def claude_terminal_websocket(websocket: WebSocket, session_path: str, mod
+     """
+     await websocket.accept()
+ 
++    if pty is None:
++        await websocket.send_text("\r\n\x1b[1;31m⛔ Terminal unavailable on this platform\x1b[0m\r\n")
++        await websocket.close(code=4003, reason="Terminal unavailable on this platform")
++        return
++
+     # Defense-in-depth: verify admin role before proceeding
+     if not _require_admin_ws(websocket):
+         await websocket.send_text("\r\n\x1b[1;31m⛔ Access denied: Administrator role required\x1b[0m\r\n")
+diff --git a/backend/services/folder_visibility_manager.py b/backend/services/folder_visibility_manager.py
+index a74f36b..0b9f02a 100644
+--- a/backend/services/folder_visibility_manager.py
++++ b/backend/services/folder_visibility_manager.py
+@@ -3,7 +3,6 @@ Folder Visibility Manager - Manages subfolder visibility restrictions
+ Allows personal folder owners to restrict subfolder visibility to themselves + a whitelist of employee IDs.
+ """
+ import copy
+-import fcntl
+ import json
+ import logging
+ import os
+@@ -13,6 +12,11 @@ import time
+ from pathlib import Path
+ from typing import List, Dict, Optional, Tuple
+ 
++try:
++    import fcntl
++except ImportError:  # Windows: no flock(2). Single-user desktop build → lock is a no-op.
++    fcntl = None
++
+ logger = logging.getLogger(__name__)
+ 
+ BACKEND_DIR = Path(__file__).resolve().parent.parent
+@@ -119,6 +123,10 @@ def _acquire_lock(shared: bool):
+     Caller is responsible for closing the handle (which releases the lock).
+     Uses fcntl.flock: LOCK_SH for reads, LOCK_EX for writes.
+     """
++    if fcntl is None:
++        # Windows: no flock(2). Return a plain handle so the caller contract
++        # (close releases the lock) holds; single-user desktop has no contention.
++        return open(_LOCK_PATH, "w")
+     fd = open(_LOCK_PATH, "w")
+     try:
+         fcntl.flock(fd.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+diff --git a/backend/services/writeback_service.py b/backend/services/writeback_service.py
+index a0eefaf..d3cd26a 100644
+--- a/backend/services/writeback_service.py
++++ b/backend/services/writeback_service.py
+@@ -8,12 +8,16 @@ Reads annotations from data_version_db.annotations and injects them into the
+ import os
+ import json
+ import copy
+-import fcntl
+ import time
+ import logging
+ import tempfile
+ from typing import Dict, List, Any, Optional
+ 
++try:
++    import fcntl
++except ImportError:  # Windows: no flock(2). Single-user desktop build → lock is a no-op.
++    fcntl = None
++
+ from database.data_version_db import data_version_db
+ from services.data_version_manager import compute_record_hash
+ from services.folder_lock_manager import check_write_permission
+@@ -821,6 +825,10 @@ def _acquire_lock(file_path: str):
+     Returns:
+         Tuple of (file_descriptor, lock_path), or (None, None) if lock could not be acquired.
+     """
++    if fcntl is None:
++        # Windows: no flock(2). Desktop is single-user/single-process-tree;
++        # atomic os.replace still guarantees torn writes. Locking is a no-op.
++        return None, None
+     lock_path = file_path + '.writeback.lock'
+     for attempt in range(_LOCK_RETRIES):
+         try:
+@@ -854,6 +862,8 @@ def _release_lock(fd, lock_path: str = None) -> None:
+     concurrent process to create a new inode and acquire the lock before
+     os.replace finishes.
+     """
++    if fcntl is None:
++        return
+     try:
+         fcntl.flock(fd, fcntl.LOCK_UN)
+     except (OSError, IOError):
+-- 
+2.43.0
+

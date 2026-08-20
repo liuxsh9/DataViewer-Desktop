@@ -14,6 +14,7 @@
 | 0007 | capability-kill-switches | §4.7 | 外部服务 API 强制开关（s3/trajlens/claude/hf/arena/distillation/validation/trajectory + scp 服务守卫） | ✅ |
 | 0008 | windows-file-semantics-tests | §4.8 | 16 个双平台文件语义用例（Linux 14 过 2 skip） | ✅ |
 | 0009 | frontend-capability-gating | §4.5 | `CapabilitiesContext` + 全部功能入口 gate（兜底全 true = 上游行为不变） | ✅ build 绿 |
+| 0010 | windows-unix-module-guards | §4.8 实测 | fcntl/pty/termios 容忍导入（Windows 无 flock → 单机锁 no-op；claude terminal 入口 503） | ✅ Linux 921/1/2；Windows CI 首跑暴露后修复 |
 
 ## 注意事项
 
