@@ -40,7 +40,19 @@ Pop-Location
 # 2. 前端构建（同源部署，无域名依赖）
 Write-Host "[build] 前端 npm ci + build..."
 Push-Location "$SourceDir\frontend"
-npm ci
+# runner 上 npm 偶发 "Exit handler never called!" 环境故障，重试兜底
+$npmOk = $false
+for ($attempt = 1; $attempt -le 3 -and -not $npmOk; $attempt++) {
+  try {
+    if ($attempt -gt 1) { Write-Host "[build] npm 重试 $attempt/3"; Remove-Item node_modules -Recurse -Force -ErrorAction SilentlyContinue }
+    npm ci
+    if ($LASTEXITCODE -ne 0) { throw "npm ci exit $LASTEXITCODE" }
+    $npmOk = $true
+  } catch {
+    if ($attempt -ge 3) { throw }
+    Start-Sleep -Seconds 10
+  }
+}
 npm run build
 Pop-Location
 if (-not (Test-Path "$SourceDir\frontend\dist\index.html")) { Fail "前端构建失败：dist/index.html 不存在" }

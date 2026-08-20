@@ -39,6 +39,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Setup Node 20（runner 默认 node 的 npm 有 Exit handler 环境故障）
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install uv
         run: pip install uv
 
