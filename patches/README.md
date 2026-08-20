@@ -16,6 +16,7 @@
 | 0009 | frontend-capability-gating | §4.5 | `CapabilitiesContext` + 全部功能入口 gate（兜底全 true = 上游行为不变） | ✅ build 绿 |
 | 0010 | windows-unix-module-guards | §4.8 实测 | fcntl/pty/termios 容忍导入（Windows 无 flock → 单机锁 no-op；claude terminal 入口 503） | ✅ Linux 921/1/2；Windows CI 首跑暴露后修复 |
 | 0011 | declare-cryptography-base-dep | §4.4 补漏 | `cryptography` 显式声明为 base 依赖（原靠 ray[default] 传递满足，拆分后 Windows 闭包缺失） | ✅ base 闭包模拟（python3 -S + pip --target）：零缺失、918 全收集 |
+| 0012 | writeback-lock-tests-platform | §4.8 | 测试文件去掉未用 `import fcntl`；flock 语义用例 win32 skipif（锁为文档化 no-op） | ✅ Linux 55 passed |
 
 ## 注意事项
 
