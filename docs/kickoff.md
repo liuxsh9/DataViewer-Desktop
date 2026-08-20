@@ -5,7 +5,7 @@
 ## 状态快照（2026-08-20，M1 完成、M2 启动中）
 
 - **D6 已拍板（2026-08-20）：禁用**（TrajViz/workbench/labeling worker 首版不打包）。M1 的实施（开关 + gate）即最终形态，无需改动；SampleBrowser "Score Traj" 经核实走 data_versions 本地打分，不受影响（D14 已澄清）。
-- **D7 已拍板（2026-08-20）：GitHub Actions windows-latest**（用户"能走 actions 就走 actions"）。已产出：`scripts/build-win.ps1`（构建）、`scripts/make-source-bundle.sh`（dev box 打包上游源码，实测 6.6M）、`ci/windows-build.yml`（pytest → build → 冒烟 → artifact）。**激活前置（需用户）**：① 本仓建 GitHub repo 并推送；② 把 `make-source-bundle.sh` 产物上传到 GitHub release，触发 workflow_dispatch 填 URL。
+- **D7 已拍板（2026-08-20）：GitHub Actions windows-latest**（用户"能走 actions 就走 actions"）。已产出：`scripts/build-win.ps1`（构建）、`scripts/make-source-bundle.sh`（dev box 打包上游源码，实测 6.6M）、`.github/workflows/windows-build.yml`（pytest → build → 冒烟 → artifact）。**已激活（2026-08-20）**：本仓已推 GitHub（liuxsh9/DataViewer-Desktop，gh CLI per-repo credential）；源码包已上传 `<版本>-src` release；触发方式：`gh workflow run windows-build.yml -f version=<版本>`。
 - **M2 状态**：Windows CI 骨架就位，等待 repo 上传后首跑；真机冒烟 = 下载 artifact 绿色包在你的 Windows 机器解压验证。
 
 - **M0 完成**（详见 plan.md §7 状态列）：sync 流程 + pytest 基线 + CI 骨架。
@@ -23,7 +23,7 @@
 | M0-1 基线锁定 + workspace 同步 | ✅ 无 tag → 锁 commit；`scripts/sync-upstream.sh` 双路径幂等；M1 期间补了全新 clone 的 git identity 兜底（git am 必需） |
 | M0-2 后端 pytest 基线 | ✅ v4.12.0 时 875/876；v4.13.0 基线复核 882/883。memory 中的 annotations db-init bug 在 v4.12.0 已修复 |
 | M0-3 前端 build 冒烟 | ✅ node v24；npm ci + build 通过 |
-| M0-4 CI 骨架 | ✅ `ci/linux-pytest.yml` 占位（待 D7/M4 定流水线） |
+| M0-4 CI 骨架 | ✅ `.github/workflows/linux-pytest.yml` 占位（D7 拍板后与 windows-build 一并激活） |
 | M0-5 回写收尾 | ✅ plan.md §7 状态列、kickoff 快照、提交 14e4d57 |
 
 ## M1 执行记录（留档）

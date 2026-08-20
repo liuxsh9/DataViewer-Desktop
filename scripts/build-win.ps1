@@ -6,7 +6,7 @@
 #
 # 流程: 校验源码 → uv 同步后端依赖 → 前端 npm ci + build →
 #       组装绿色目录（backend + frontend/dist + python/ venv + 配置模板 + README）
-# 说明: 本机是 Linux dev box，此脚本只写不跑；Windows 验证走 CI（ci/windows-build.yml）。
+# 说明: 本机是 Linux dev box，此脚本只写不跑；Windows 验证走 CI（.github/workflows/windows-build.yml）。
 
 param(
     [Parameter(Mandatory=$true)][string]$SourceDir,   # 上游基线 + 补丁 apply 后的源码树

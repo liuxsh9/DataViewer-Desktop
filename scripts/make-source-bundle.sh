@@ -6,7 +6,7 @@
 #       CI 的 Windows job 通过源码包拿到补丁 apply 后的完整树。
 # 产物: workspace/source-<version>.tar.gz（不含 .git / node_modules / .venv）
 # 使用: 上传到 GitHub release asset（或任意可下载 URL），workflow_dispatch 时
-#       把下载地址填给 ci/windows-build.yml 的 source_archive_url 输入。
+#       上传到 <版本>-src release，由 .github/workflows/windows-build.yml 下载。
 
 set -euo pipefail
 

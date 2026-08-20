@@ -21,7 +21,7 @@ DataViewer 的**单机 Windows 版**（路线 B：原生绿色包 + 托盘启动
 | `scripts/` | 同步/构建脚本（sync-upstream.sh、build-win.ps1） |
 | `launcher/` | Windows 托盘启动器（pystray） |
 | `installer/` | Inno Setup 安装脚本 |
-| `ci/` | 流水线定义 |
+| `.github/workflows/` | 流水线定义（linux-pytest / windows-build） |
 | `workspace/` | [gitignore] 上游工作树（clone + 补丁应用，不提交） |
 
 ## 关键决策速览

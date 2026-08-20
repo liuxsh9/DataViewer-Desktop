@@ -209,7 +209,7 @@ DataViewer-Desktop/
 │   └── build-win.ps1          # Windows 构建脚本（CI 与手工共用）
 ├── launcher/                  # pystray 托盘启动器源码
 ├── installer/                 # Inno Setup 脚本（.iss）
-├── ci/                        # GitHub Actions / 内部流水线定义
+├── .github/workflows/         # GitHub Actions 流水线（linux-pytest / windows-build）
 └── workspace/                 # [gitignore] 上游 clone + 打补丁后的工作树（不提交）
 ```
 
@@ -252,7 +252,7 @@ sync-upstream.sh:
 
 上游源码获取（内网 CodeHub 对 GitHub runner 不可达）：dev box 用
 `scripts/make-source-bundle.sh` 打包「基线 + 补丁 apply 后的完整树」成 tar，上传 GitHub
-release asset / workflow artifact；`ci/windows-build.yml` 以 `SOURCE_ARCHIVE_URL` 输入接收。
+release asset（`gh release create <版本>-src`）；`.github/workflows/windows-build.yml` 以 `version` 输入触发，用 gh CLI 下载（GITHUB_TOKEN 鉴权）。
 后续可评估在 GitHub 建上游 mirror（需 push 凭据）替代打包。
 
 ---
@@ -261,7 +261,7 @@ release asset / workflow artifact；`ci/windows-build.yml` 以 `SOURCE_ARCHIVE_U
 
 | 阶段 | 内容 | 验收标准 | 估计 | 状态 |
 |------|------|----------|------|------|
-| **M0 脚手架** | 本仓结构、sync-upstream 流程、CI 骨架、workspace 同步到上游基线跑通 pytest | Linux 上 patch 流程端到端可用 | 0.5-1 周 | ✅ 完成 2026-08-20：基线锁定 commit `1d2b0df`（上游无 tag）；sync 脚本从零跑通、工作树干净；上游后端 pytest **875/876**（1 个既存失败：`test_report_panguml_shape` 依赖本机 workbench 在线，上游工作树同环境复现，不修）；前端 `npm ci && npm run build` 通过；CI 占位骨架 `ci/linux-pytest.yml` 已落（待 D7/M4 定流水线）。**2026-08-20 基线随上游 HEAD 更新至 v4.13.0 = `cc71d62`**，pytest 基线复核 **882/883**（唯一失败同上） |
+| **M0 脚手架** | 本仓结构、sync-upstream 流程、CI 骨架、workspace 同步到上游基线跑通 pytest | Linux 上 patch 流程端到端可用 | 0.5-1 周 | ✅ 完成 2026-08-20：基线锁定 commit `1d2b0df`（上游无 tag）；sync 脚本从零跑通、工作树干净；上游后端 pytest **875/876**（1 个既存失败：`test_report_panguml_shape` 依赖本机 workbench 在线，上游工作树同环境复现，不修）；前端 `npm ci && npm run build` 通过；CI 占位骨架 `linux-pytest.yml` 已落（D7 拍板后迁至 `.github/workflows/`）。**2026-08-20 基线随上游 HEAD 更新至 v4.13.0 = `cc71d62`**，pytest 基线复核 **882/883**（唯一失败同上） |
 | **M1 适配补丁**（核心风险） | 4.1 路径收敛 → 4.2 spawn → 4.3 内存 → 4.4 依赖拆分 → 4.5 capability → 4.6 认证 → 4.7 降级 | 上游 pytest 全绿 + Linux spawn 模式全绿 + Windows CI pytest 绿 | 2-3 周 | ✅ **主体完成 2026-08-20**：9 个补丁（patches/0001-0009，见 patches/README.md），重放树上 fork **921/1/2**、spawn **921/1/2**（唯一失败 = workbench 离线既存问题，非补丁引入）；前端 build 绿。**遗留**：① Windows CI 验证（M2/构建机，D7）② uv.lock 失配需构建机补 `uv lock` ③ D6 待拍板后统一 SampleBrowser 前端 gate（D14） |
 | **M2 Windows 冒烟** | 绿色包在 Windows 真机跑通核心链路 | 浏览/JSONL/聚合/格式转换/dataset-stats 小任务全过；外网功能不可见 | 1-2 周 | 未开始 |
 | **M3 产品化** | pystray 启动器、Inno Setup、使用说明、日志收集 | 双击安装 → 一键使用；卸载干净 | 1 周 | 未开始 |
