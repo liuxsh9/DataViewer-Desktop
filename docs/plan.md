@@ -101,8 +101,8 @@
 
 ### 3.2 产物形态（两个）
 
-1. **绿色包**（zip）：`DataViewer-Desktop-v4.12.0-d1-win64.zip` — 解压即用，`start.bat` / 托盘 exe
-2. **安装器**（Inno Setup，免费）：`DataViewerDesktopSetup-v4.12.0-d1.exe` — 开始菜单/桌面快捷方式、卸载、可选开机自启
+1. **绿色包**（zip）：`DataViewer-Desktop-v4.13.0-d1-win64.zip` — 解压即用，`start.bat` / 托盘 exe
+2. **安装器**（Inno Setup，免费）：`DataViewerDesktopSetup-v4.13.0-d1.exe` — 开始菜单/桌面快捷方式、卸载、可选开机自启
 
 绿色目录内容：
 
@@ -215,7 +215,7 @@ sync-upstream.sh:
   1. git clone/fetch DataViewer 到 workspace/，checkout 指定 tag（如 v4.12.0）
   2. git am patches/*.patch（失败则进入人工 rebase 模式）
   3. 后端 pytest + 前端 build 冒烟
-  4. 通过后打 tag：<上游tag>-d<N>（如 v4.12.0-d1，d = desktop patch level）
+  4. 通过后打 tag：<上游tag>-d<N>（如 v4.13.0-d1，d = desktop patch level）
 ```
 
 - **补丁上游化**：每轮验证稳定后，逐个 PR 回 DataViewer 主仓；合入后从 `patches/` 删除 → 理想终态 patches 目录为空，桌面版 = 主仓 tag + 打包层
@@ -253,7 +253,7 @@ sync-upstream.sh:
 
 | 阶段 | 内容 | 验收标准 | 估计 | 状态 |
 |------|------|----------|------|------|
-| **M0 脚手架** | 本仓结构、sync-upstream 流程、CI 骨架、workspace 同步到 v4.12.0 跑通上游 pytest | Linux 上 patch 流程端到端可用 | 0.5-1 周 | ✅ 完成 2026-08-20：基线锁定 v4.12.0 = commit `1d2b0df`（上游无 tag）；sync 脚本从零跑通、工作树干净；上游后端 pytest **875/876**（1 个既存失败：`test_report_panguml_shape` 依赖本机 workbench 在线，上游工作树同环境复现，不修）；前端 `npm ci && npm run build` 通过；CI 占位骨架 `ci/linux-pytest.yml` 已落（待 D7/M4 定流水线） |
+| **M0 脚手架** | 本仓结构、sync-upstream 流程、CI 骨架、workspace 同步到上游基线跑通 pytest | Linux 上 patch 流程端到端可用 | 0.5-1 周 | ✅ 完成 2026-08-20：基线锁定 commit `1d2b0df`（上游无 tag）；sync 脚本从零跑通、工作树干净；上游后端 pytest **875/876**（1 个既存失败：`test_report_panguml_shape` 依赖本机 workbench 在线，上游工作树同环境复现，不修）；前端 `npm ci && npm run build` 通过；CI 占位骨架 `ci/linux-pytest.yml` 已落（待 D7/M4 定流水线）。**2026-08-20 基线随上游 HEAD 更新至 v4.13.0 = `cc71d62`**，pytest 基线复核 **882/883**（唯一失败同上） |
 | **M1 适配补丁**（核心风险） | 4.1 路径收敛 → 4.2 spawn → 4.3 内存 → 4.4 依赖拆分 → 4.5 capability → 4.6 认证 → 4.7 降级 | 上游 pytest 全绿 + Linux spawn 模式全绿 + Windows CI pytest 绿 | 2-3 周 | 未开始。前置 spike：Linux 强制 spawn 全量 pytest（§8 风险表第一行），M0 完成即启动 |
 | **M2 Windows 冒烟** | 绿色包在 Windows 真机跑通核心链路 | 浏览/JSONL/聚合/格式转换/dataset-stats 小任务全过；外网功能不可见 | 1-2 周 | 未开始 |
 | **M3 产品化** | pystray 启动器、Inno Setup、使用说明、日志收集 | 双击安装 → 一键使用；卸载干净 | 1 周 | 未开始 |

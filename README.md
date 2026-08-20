@@ -29,4 +29,4 @@ DataViewer 的**单机 Windows 版**（路线 B：原生绿色包 + 托盘启动
 - 不用 PyInstaller 单 exe；产物 = 绿色 zip + Inno Setup 安装器
 - 业务代码不 fork：适配改动以 patch 形式迭代，最终提交回 DataViewer 主仓
 - 首版禁用：ray、datalab、HF、arena、claude API（及待确认的 Gateway/S3/volcengine/scp）
-- 版本号：`<上游tag>-d<N>`（如 `v4.12.0-d1`）
+- 版本号：`<上游tag>-d<N>`（如 `v4.13.0-d1`）

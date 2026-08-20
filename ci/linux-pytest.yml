@@ -7,7 +7,7 @@
 # - 上游仓库在华为内网 CodeHub（ssh://git@szv-open.codehub.huawei.com:2222/
 #   innersource/LLMDevKit_G/DataViewer.git），GitHub runner 默认不可达；
 #   UPSTREAM_REPO 需在流水线落地时替换为可访问来源（镜像/归档）。
-# - 上游无 git tag；v4.12.0 = commit 1d2b0df43977b75173d6f95e38385fd6459ce28c。
+# - 上游无 git tag；v4.13.0 = commit cc71d62（上游版本以 commit message 标注）。
 # - 后端 requires-python >= 3.12；依赖经 uv（backend/uv.lock）。
 # - 已知既存失败（dev box 同环境复现，非本仓引入）:
 #   tests/test_format_ops_api.py::TestTaskAccess::test_report_panguml_shape
@@ -26,7 +26,7 @@ on:
       upstream_ref:
         description: "上游基线（tag 或 commit）"
         required: true
-        default: "1d2b0df43977b75173d6f95e38385fd6459ce28c" # v4.12.0
+        default: "cc71d62" # v4.13.0
 
 env:
   # 占位默认值：内网 CodeHub（见文件头注释，GitHub runner 不可达）
