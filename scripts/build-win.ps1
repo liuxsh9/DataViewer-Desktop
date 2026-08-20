@@ -38,22 +38,21 @@ uv sync
 Pop-Location
 
 # 2. 前端构建（同源部署，无域名依赖）
-Write-Host "[build] 前端 npm ci + build..."
+#    dist 是纯静态产物、跨平台通用。CI 的源码包由 dev box 预构建 dist 打入
+#    （GitHub runner 上 npm 有 "Exit handler never called!" 环境故障）；
+#    dist 已存在且新于源码时直接复用，跳过 npm。
 Push-Location "$SourceDir\frontend"
-# runner 上 npm 偶发 "Exit handler never called!" 环境故障，重试兜底
-$npmOk = $false
-for ($attempt = 1; $attempt -le 3 -and -not $npmOk; $attempt++) {
-  try {
-    if ($attempt -gt 1) { Write-Host "[build] npm 重试 $attempt/3"; Remove-Item node_modules -Recurse -Force -ErrorAction SilentlyContinue }
-    npm ci
-    if ($LASTEXITCODE -ne 0) { throw "npm ci exit $LASTEXITCODE" }
-    $npmOk = $true
-  } catch {
-    if ($attempt -ge 3) { throw }
-    Start-Sleep -Seconds 10
-  }
+$distFresh = (Test-Path "dist\index.html") -and
+             ((Get-Item "dist\index.html").LastWriteTime -gt (Get-Item "package.json").LastWriteTime)
+if ($distFresh) {
+  Write-Host "[build] dist 已预构建（dev box 打包），跳过 npm"
+} else {
+  Write-Host "[build] 前端 npm ci + build..."
+  npm ci
+  if ($LASTEXITCODE -ne 0) { Fail "npm ci 失败: $LASTEXITCODE" }
+  npm run build
+  if ($LASTEXITCODE -ne 0) { Fail "npm run build 失败: $LASTEXITCODE" }
 }
-npm run build
 Pop-Location
 if (-not (Test-Path "$SourceDir\frontend\dist\index.html")) { Fail "前端构建失败：dist/index.html 不存在" }
 
