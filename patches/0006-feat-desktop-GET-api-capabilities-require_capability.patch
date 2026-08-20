@@ -1,0 +1,184 @@
+From 8b2110da2fdc183f0a7cc013edbdcc1693bcc37a Mon Sep 17 00:00:00 2001
+From: l00653114 <l00653114@example.com>
+Date: Thu, 20 Aug 2026 11:45:11 +0800
+Subject: [PATCH 6/9] feat(desktop): GET /api/capabilities + require_capability
+ gate helper
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- /api/capabilities 返回 config.CAPABILITIES 扁平 JSON（11 键，读时求值）
+- require_capability(name): 开关关闭 → 503 "X is unavailable in this deployment"
+- 4 个测试用例
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/api/capabilities.py            | 43 +++++++++++++
+ backend/main.py                        |  3 +-
+ backend/tests/test_capabilities_api.py | 83 ++++++++++++++++++++++++++
+ 3 files changed, 128 insertions(+), 1 deletion(-)
+ create mode 100644 backend/api/capabilities.py
+ create mode 100644 backend/tests/test_capabilities_api.py
+
+diff --git a/backend/api/capabilities.py b/backend/api/capabilities.py
+new file mode 100644
+index 0000000..f386e4d
+--- /dev/null
++++ b/backend/api/capabilities.py
+@@ -0,0 +1,43 @@
++"""Capabilities API — deployment feature switches.
++
++GET /api/capabilities exposes the ``config.CAPABILITIES`` registry as flat
++JSON (``{"gateway": true, "datalab": false, ...}``) so the frontend can gate
++UI entries per deployment. ``require_capability`` is the backend-side gate:
++routers that belong to a switchable capability (scp, claude, ...) declare it
++as a dependency and get an immediate 503 when the switch is off. Disabling a
++capability must never remove code — only the switch + entry visibility
++(project plan ADR D4/D5).
++
++Both the endpoint and the dependency read ``config.CAPABILITIES`` at request
++time (module attribute, not a snapshot), so tests can monkeypatch
++``config.CAPABILITIES`` and the next request reflects the new value.
++"""
++
++from fastapi import APIRouter, Depends, HTTPException
++
++import config
++
++router = APIRouter()
++
++
++@router.get("/capabilities")
++async def get_capabilities() -> dict:
++    """Return the flat capability registry for this deployment."""
++    return dict(config.CAPABILITIES)
++
++
++def require_capability(name: str):
++    """Dependency factory gating a route/router on a capability switch.
++
++    Usage: ``Depends(require_capability("scp"))`` on the route, or
++    ``APIRouter(dependencies=[Depends(require_capability("scp"))])`` on the
++    whole router. Returns 503 when the switch is off; a no-op when it is on.
++    An unknown capability name is treated as unavailable (fail-safe).
++    """
++    def _guard() -> None:
++        if not config.CAPABILITIES.get(name):
++            raise HTTPException(
++                status_code=503,
++                detail=f"{name} is unavailable in this deployment",
++            )
++    return _guard
+diff --git a/backend/main.py b/backend/main.py
+index 33a5cc4..a030ca2 100644
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
+ from fastapi import FastAPI
+ from fastapi.middleware.cors import CORSMiddleware
+ from fastapi.staticfiles import StaticFiles
+-from api import files, system, s3, validation, hf_download, network, parquet, metadata, metadata_schema, dataset_builder, distillation, claude_terminal, auth, notes, copy_tasks, filter_tasks, models, feedback, folder_lock, config_management, pilot, quality_check, token_calculator, spot_check, users, audit, eval_analysis, system_monitor, notifications, personal_folder, folder_visibility, ask_claude, claude_chat, data_versions, labeling, trajectory, arena, content, trajlens, aggregation, api_token, gateway_push, format_ops, dataset_stats
++from api import files, system, s3, validation, hf_download, network, parquet, metadata, metadata_schema, dataset_builder, distillation, claude_terminal, auth, notes, copy_tasks, filter_tasks, models, feedback, folder_lock, config_management, pilot, quality_check, token_calculator, spot_check, users, audit, eval_analysis, system_monitor, notifications, personal_folder, folder_visibility, ask_claude, claude_chat, data_versions, labeling, trajectory, arena, content, trajlens, aggregation, api_token, gateway_push, format_ops, dataset_stats, capabilities
+ from middleware.auth_middleware import JWTAuthMiddleware
+ from middleware.auto_audit import AutoAuditMiddleware
+ from middleware.folder_visibility import FolderVisibilityMiddleware
+@@ -300,6 +300,7 @@ app.include_router(api_token.router, prefix="/api/token-auth", tags=["token-auth
+ app.include_router(gateway_push.router, prefix="/api/gateway-push", tags=["gateway-push"])  # PanguML → ATIF → MindForge Gateway
+ app.include_router(format_ops.router, prefix="/api/format-ops", tags=["format-ops"])  # Standalone convert + format validation
+ app.include_router(dataset_stats.router, prefix="/api/dataset-stats", tags=["dataset-stats"])  # Training-data stats dashboard
++app.include_router(capabilities.router, prefix="/api", tags=["capabilities"])  # Deployment capability switches
+ 
+ @app.get("/api")
+ async def root():
+diff --git a/backend/tests/test_capabilities_api.py b/backend/tests/test_capabilities_api.py
+new file mode 100644
+index 0000000..0ead0a4
+--- /dev/null
++++ b/backend/tests/test_capabilities_api.py
+@@ -0,0 +1,83 @@
++"""Endpoint-level tests for the capabilities API (api/capabilities.py).
++
++GET /api/capabilities exposes config.CAPABILITIES as flat JSON; the endpoint
++and the require_capability dependency read the config module attribute at
++request time, so monkeypatching config.CAPABILITIES is picked up by the next
++request. Uses a small FastAPI app + TestClient, mirroring
++test_folder_visibility_middleware.py.
++"""
++
++import sys
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
++
++import pytest
++from fastapi import Depends, FastAPI
++from starlette.testclient import TestClient
++
++import config
++from api import capabilities
++
++# The flat registry contract shared with the frontend.
++EXPECTED_KEYS = {
++    "gateway", "datalab", "hf", "arena", "claude", "s3",
++    "volcengine", "scp", "ray_quality", "traj_viz", "workbench",
++}
++
++
++@pytest.fixture
++def client():
++    app = FastAPI()
++    app.include_router(capabilities.router, prefix="/api")
++    return TestClient(app)
++
++
++def test_default_all_enabled(client):
++    """All switches default on: the registry is the full flat True set."""
++    resp = client.get("/api/capabilities")
++    assert resp.status_code == 200
++    body = resp.json()
++    assert set(body.keys()) == EXPECTED_KEYS
++    assert all(body.values())
++
++
++def test_partial_false_reflected(client, monkeypatch):
++    """A monkeypatched registry is served verbatim (read at request time)."""
++    patched = dict(config.CAPABILITIES)
++    patched["gateway"] = False
++    patched["workbench"] = False
++    monkeypatch.setattr(config, "CAPABILITIES", patched)
++
++    body = client.get("/api/capabilities").json()
++    assert body == patched
++    assert body["gateway"] is False and body["workbench"] is False
++    assert body["datalab"] is True
++
++
++def _guarded_app():
++    app = FastAPI()
++
++    @app.get("/guarded")
++    async def guarded(_: None = Depends(capabilities.require_capability("scp"))):
++        return {"ok": True}
++
++    return app
++
++
++def test_require_capability_enabled():
++    """Switch on: the dependency is a no-op and the route serves 200."""
++    resp = TestClient(_guarded_app()).get("/guarded")
++    assert resp.status_code == 200
++    assert resp.json() == {"ok": True}
++
++
++def test_require_capability_disabled(monkeypatch):
++    """Switch off: the dependency 503s with the deployment detail."""
++    patched = dict(config.CAPABILITIES)
++    patched["scp"] = False
++    monkeypatch.setattr(config, "CAPABILITIES", patched)
++
++    resp = TestClient(_guarded_app()).get("/guarded")
++    assert resp.status_code == 503
++    assert resp.json()["detail"] == "scp is unavailable in this deployment"
+-- 
+2.43.0
+

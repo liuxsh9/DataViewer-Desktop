@@ -38,6 +38,12 @@ fi
 git -C "$WORKTREE_DIR" am --abort >/dev/null 2>&1 || true
 echo "[sync] checkout 基线: $BASELINE"
 git -C "$WORKTREE_DIR" checkout --force "$BASELINE"
+# 全新 clone 没有 identity，git am 会失败——补一个本地兜底（补丁作者信息
+# 由 patch 自带，这里只是 committer）
+if [[ -z "$(git -C "$WORKTREE_DIR" config user.name)" ]]; then
+  git -C "$WORKTREE_DIR" config user.name "DataViewer-Desktop Sync"
+  git -C "$WORKTREE_DIR" config user.email "sync@dataviewer-desktop.local"
+fi
 
 # 3. apply 补丁栈（空栈跳过）
 shopt -s nullglob

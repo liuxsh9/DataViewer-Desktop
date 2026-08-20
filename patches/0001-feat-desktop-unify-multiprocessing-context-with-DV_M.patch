@@ -1,0 +1,310 @@
+From 659f14e9d96f7aeb05263da07f85063bb1adfaf1 Mon Sep 17 00:00:00 2001
+From: l00653114 <l00653114@example.com>
+Date: Thu, 20 Aug 2026 11:21:49 +0800
+Subject: [PATCH 1/9] feat(desktop): unify multiprocessing context with
+ DV_MP_START_METHOD (spawn-compatible)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/api/files.py                          |  6 ++-
+ backend/api/filter_tasks.py                   |  3 +-
+ backend/post_train_quality/manual.py          |  7 ++--
+ backend/services/data_version_manager.py      |  3 +-
+ backend/services/dataset_stats/engine.py      |  4 +-
+ backend/services/jsonl_quality_checker.py     |  4 +-
+ .../services/parquet_conversion_manager.py    |  6 ++-
+ backend/services/quality_processor.py         |  3 +-
+ backend/services/token_counter_service.py     |  6 ++-
+ backend/utils/process_context.py              | 41 +++++++++++++++++++
+ 10 files changed, 70 insertions(+), 13 deletions(-)
+ create mode 100644 backend/utils/process_context.py
+
+diff --git a/backend/api/files.py b/backend/api/files.py
+index 243fcbc..f5eaf8d 100644
+--- a/backend/api/files.py
++++ b/backend/api/files.py
+@@ -4368,6 +4368,7 @@ async def split_folder_jsonl(
+     try:
+         from concurrent.futures import ProcessPoolExecutor, as_completed
+         import multiprocessing
++        from utils.process_context import get_context
+ 
+         # Validate input folder
+         source_path = safe_path(folder_path)
+@@ -4415,7 +4416,7 @@ async def split_folder_jsonl(
+         total_parts_created = 0
+ 
+         # Process files in parallel
+-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
++        with ProcessPoolExecutor(max_workers=max_workers, mp_context=get_context()) as executor:
+             futures = {
+                 executor.submit(
+                     _split_single_jsonl_file,
+@@ -5051,6 +5052,7 @@ async def analyze_jsonl_rounds(path: str):
+     """
+     import multiprocessing
+     from concurrent.futures import ProcessPoolExecutor
++    from utils.process_context import get_context
+ 
+     try:
+         source_path = safe_path(path)
+@@ -5115,7 +5117,7 @@ async def analyze_jsonl_rounds(path: str):
+             logger.info(f"Processing {len(all_lines)} lines in {len(chunks)} chunks with {num_workers} workers")
+ 
+             # Process chunks in parallel
+-            with ProcessPoolExecutor(max_workers=num_workers) as executor:
++            with ProcessPoolExecutor(max_workers=num_workers, mp_context=get_context()) as executor:
+                 results = list(executor.map(_process_rounds_chunk, chunks))
+ 
+             # Aggregate results
+diff --git a/backend/api/filter_tasks.py b/backend/api/filter_tasks.py
+index 0901244..73e4079 100644
+--- a/backend/api/filter_tasks.py
++++ b/backend/api/filter_tasks.py
+@@ -10,6 +10,7 @@ import json
+ import uuid
+ import time
+ from utils.timezone_utils import now_iso
++from utils.process_context import get_context
+ import multiprocessing
+ from concurrent.futures import ProcessPoolExecutor, as_completed
+ import os
+@@ -375,7 +376,7 @@ def process_filter_task(task_id: str, source_folder: Path, output_folder: Path,
+         processed_files = 0
+         total_matched_lines = 0
+ 
+-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
++        with ProcessPoolExecutor(max_workers=max_workers, mp_context=get_context()) as executor:
+             future_to_file = {executor.submit(filter_jsonl_file, args): args
+                              for args in jsonl_files}
+ 
+diff --git a/backend/post_train_quality/manual.py b/backend/post_train_quality/manual.py
+index 59c4e2d..b44cc48 100644
+--- a/backend/post_train_quality/manual.py
++++ b/backend/post_train_quality/manual.py
+@@ -9,6 +9,7 @@ import moxing as mox
+ from collections import Counter
+ from tqdm import tqdm
+ 
++from utils.process_context import get_context
+ from basic_format import basic_format
+ from fast_slow_check import fast_slow_check
+ from keyword_check import keyword_check
+@@ -137,7 +138,7 @@ def file_check_new(all_file_paths):
+     num_workers = 180
+     print(f"Starting processing with {num_workers} workers...")
+ 
+-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
++    with ProcessPoolExecutor(max_workers=num_workers, mp_context=get_context()) as executor:
+         # Submit all jobs
+         futures = {executor.submit(process_single_file, fp): fp for fp in all_file_paths}
+ 
+@@ -159,7 +160,7 @@ def file_check_new(all_file_paths):
+     # function_list = [rule_validate_ending]
+     params = [(sample, function_list) for sample in all_data]
+     results = []
+-    with mp.Pool(processes=mp.cpu_count() - 10) as pool:
++    with get_context().Pool(processes=mp.cpu_count() - 10) as pool:
+         for result in tqdm(pool.imap(process_single_sample, params), total=len(params)):
+             results.append(result)
+ 
+@@ -224,7 +225,7 @@ def file_check(path):
+     params = [(sample, function_list) for sample in data]
+ 
+     results = []
+-    with mp.Pool(processes=mp.cpu_count() - 10) as pool:
++    with get_context().Pool(processes=mp.cpu_count() - 10) as pool:
+         for result in tqdm(pool.imap(process_single_sample, params), total=len(params)):
+             results.append(result)
+ 
+diff --git a/backend/services/data_version_manager.py b/backend/services/data_version_manager.py
+index 12650bc..06df8e5 100644
+--- a/backend/services/data_version_manager.py
++++ b/backend/services/data_version_manager.py
+@@ -11,6 +11,7 @@ import threading
+ import logging
+ from typing import Optional, Dict, List, Any
+ from utils.timezone_utils import now_iso
++from utils.process_context import get_context
+ from concurrent.futures import ProcessPoolExecutor, as_completed
+ 
+ from database.data_version_db import data_version_db
+@@ -400,7 +401,7 @@ class IngestionEngine:
+                 file_results = []
+                 worker_args = [(fp, dataset_path) for fp in jsonl_files]
+                 files_completed = 0
+-                with ProcessPoolExecutor(max_workers=num_workers) as executor:
++                with ProcessPoolExecutor(max_workers=num_workers, mp_context=get_context()) as executor:
+                     futures = {executor.submit(_process_file_worker, arg): arg for arg in worker_args}
+                     for future in as_completed(futures):
+                         if cancel_event.is_set():
+diff --git a/backend/services/dataset_stats/engine.py b/backend/services/dataset_stats/engine.py
+index 42b150e..765180c 100644
+--- a/backend/services/dataset_stats/engine.py
++++ b/backend/services/dataset_stats/engine.py
+@@ -29,6 +29,7 @@ from concurrent.futures.process import BrokenProcessPool
+ from typing import Callable, Dict, List, Optional, Tuple
+ 
+ from services.aggregation_diff import sha256_file
++from utils.process_context import get_context
+ from . import tokenizer as _tk
+ from .collectors import build_collectors
+ from .rowwalk import RowView
+@@ -133,7 +134,8 @@ def _get_pool() -> ProcessPoolExecutor:
+             logger.info("[dataset-stats] creating pool with %d workers "
+                         "(MemAvailable=%dMB)", workers, _available_memory_mb())
+             _pool = ProcessPoolExecutor(max_workers=workers,
+-                                        initializer=_worker_init)
++                                        initializer=_worker_init,
++                                        mp_context=get_context())
+         return _pool
+ 
+ 
+diff --git a/backend/services/jsonl_quality_checker.py b/backend/services/jsonl_quality_checker.py
+index 680505d..3e6b0e9 100644
+--- a/backend/services/jsonl_quality_checker.py
++++ b/backend/services/jsonl_quality_checker.py
+@@ -13,6 +13,8 @@ from abc import ABC, abstractmethod
+ import multiprocessing
+ import logging
+ 
++from utils.process_context import get_context
++
+ logger = logging.getLogger(__name__)
+ 
+ 
+@@ -294,7 +296,7 @@ class JsonlQualityChecker:
+         max_workers = self.config.get("max_workers", min(multiprocessing.cpu_count(), 8))
+         results = []
+ 
+-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
++        with ProcessPoolExecutor(max_workers=max_workers, mp_context=get_context()) as executor:
+             future_to_file = {
+                 executor.submit(self._check_file_wrapper, str(f), selected_rules): f
+                 for f in jsonl_files
+diff --git a/backend/services/parquet_conversion_manager.py b/backend/services/parquet_conversion_manager.py
+index 9b262e5..e3880e3 100644
+--- a/backend/services/parquet_conversion_manager.py
++++ b/backend/services/parquet_conversion_manager.py
+@@ -12,6 +12,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
+ import multiprocessing
+ 
+ from services.unified_task_manager import UnifiedTaskManager
++from utils.process_context import get_context
+ 
+ # Store directory
+ _STORE_DIR = str(Path(__file__).parent.parent / "data" / "tasks" / "parquet_conversion")
+@@ -189,7 +190,10 @@ async def run_chunked_parallel_conversion(task_id: str, parquet_path: str, outpu
+             temp_output = str(temp_dir / f"chunk_{i:05d}.jsonl")
+             work_items.append((parquet_path, start_row, chunk_rows, temp_output, i))
+ 
+-        ctx = multiprocessing.get_context('spawn')
++        # Process chunks in parallel using spawn context (deliberate: pyarrow
++        # reads in forked children inherit parent state — always spawn, even on
++        # Linux; the explicit method override beats the DV_MP_START_METHOD env)
++        ctx = get_context(method="spawn")
+         completed_chunks = 0
+ 
+         with ProcessPoolExecutor(max_workers=num_workers, mp_context=ctx) as executor:
+diff --git a/backend/services/quality_processor.py b/backend/services/quality_processor.py
+index 9a9e426..1ed9aed 100644
+--- a/backend/services/quality_processor.py
++++ b/backend/services/quality_processor.py
+@@ -10,6 +10,7 @@ from pathlib import Path
+ from typing import List, Dict, Any, Optional, Tuple, Callable
+ from datetime import datetime
+ from utils.timezone_utils import now_iso
++from utils.process_context import get_context
+ from concurrent.futures import ProcessPoolExecutor, as_completed
+ import traceback
+ import importlib.util
+@@ -619,7 +620,7 @@ class QualityProcessor:
+ 
+         rules_dir_str = str(self.rule_loader.rules_dir)
+ 
+-        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
++        with ProcessPoolExecutor(max_workers=self.max_workers, mp_context=get_context()) as executor:
+             futures = {}
+ 
+             # 如果只有一个文件，使用分块处理
+diff --git a/backend/services/token_counter_service.py b/backend/services/token_counter_service.py
+index bdf8372..155018a 100644
+--- a/backend/services/token_counter_service.py
++++ b/backend/services/token_counter_service.py
+@@ -30,6 +30,7 @@ import orjson
+ from services.dataset_stats import tokenizer as ds_tokenizer
+ from services.dataset_stats.rowwalk import content_to_text
+ from services.token_csv_to_excel import cvt_excel_from_results
++from utils.process_context import get_context
+ from utils.timezone_utils import now_iso
+ 
+ logger = logging.getLogger(__name__)
+@@ -266,7 +267,7 @@ class TokenTaskManager:
+             return
+         self._initialized = True
+         self._running_tasks: Dict[str, bool] = {}
+-        self._mp_manager = mp.Manager()
++        self._mp_manager = get_context().Manager()
+         self._cancel_flags: Dict[str, Any] = {}
+         from services.unified_task_manager import UnifiedTaskManager
+         self._mgr = UnifiedTaskManager(
+@@ -354,7 +355,8 @@ def run_token_count_task(task_id: str, input_path: str, output_file: str, num_pr
+ 
+     try:
+         # 使用 ProcessPoolExecutor 进行并行计算
+-        with ProcessPoolExecutor(max_workers=num_processes, initializer=_init_worker) as executor:
++        with ProcessPoolExecutor(max_workers=num_processes, initializer=_init_worker,
++                                 mp_context=get_context()) as executor:
+             futures = {executor.submit(process_func, (f, input_path)): f for f in all_files}
+ 
+             for future in as_completed(futures):
+diff --git a/backend/utils/process_context.py b/backend/utils/process_context.py
+new file mode 100644
+index 0000000..9992c09
+--- /dev/null
++++ b/backend/utils/process_context.py
+@@ -0,0 +1,41 @@
++"""
++Unified multiprocessing start-method resolution.
++
++The upstream backend's multi-process code is written against fork semantics
++(zero-copy ProcessPoolExecutor pools). Windows has no fork — only spawn — so
++every multiprocessing entry point must create its context through
++:func:`get_context` instead of relying on the platform default:
++
++- ``DV_MP_START_METHOD`` env var forces a method on any platform
++  (``DV_MP_START_METHOD=spawn`` on Linux is the CI pre-validation for the
++  Windows single-machine build); an invalid value raises ValueError at first
++  use instead of silently falling back.
++- Unset: ``win32`` → ``spawn`` (the only method Windows provides), anything
++  else → ``fork`` (upstream's original semantics — Linux behavior is
++  byte-for-byte unchanged).
++"""
++import multiprocessing
++import os
++import sys
++from typing import Optional
++
++_VALID_METHODS = ("fork", "spawn", "forkserver")
++
++
++def get_context(method: Optional[str] = None) -> multiprocessing.context.BaseContext:
++    """Resolve and return a multiprocessing context.
++
++    Precedence:
++    1. ``method`` argument — explicit override, for modules with deliberate
++       spawn-always semantics (parquet_conversion_manager). Normally None.
++    2. ``DV_MP_START_METHOD`` env var (one of fork/spawn/forkserver).
++    3. Platform default: ``win32`` → ``spawn``, other platforms → ``fork``.
++    """
++    if method is None:
++        method = os.environ.get("DV_MP_START_METHOD")
++        if method is None:
++            method = "spawn" if sys.platform == "win32" else "fork"
++    if method not in _VALID_METHODS:
++        raise ValueError(
++            f"DV_MP_START_METHOD must be one of {_VALID_METHODS}, got {method!r}")
++    return multiprocessing.get_context(method)
+-- 
+2.43.0
+

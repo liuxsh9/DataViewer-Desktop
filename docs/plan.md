@@ -1,6 +1,6 @@
 # DataViewer Desktop — 单机 Windows 版实现方案与总体计划
 
-> 状态：ADR 已定（D1-D11，2026-08-19，仅 D6 待确认）；M0 完成（2026-08-20）
+> 状态：ADR 已定（D1-D15，仅 D6 待用户最终拍板）；M0 完成、M1 主体完成（2026-08-20），下一步 M2
 > 上游：`/data/projects/DataViewer`（单一代码库，本仓不做业务代码 fork）
 > 目标平台：Windows 10/11 x64
 > 定稿日期：2026-08-19
@@ -16,12 +16,16 @@
 | D3 | 代码模型 | **单一代码库**：业务代码只存在于 DataViewer 主仓；本仓是产品化/打包层（补丁栈 + 启动器 + 安装器 + CI + 文档）。适配改动以 patch 形式在本仓迭代，**最终目标提交回主仓** | 已定 |
 | D4 | 首版功能裁剪 | 禁用：**ray（分布式质检）、datalab 一键质检、HF 下载、arena 导入、claude API/CLI**。代码保留、后端开关关闭、前端入口隐藏 | 已定 |
 | D5 | Gateway/S3/volcengine/scp | 首版随 D4 一并禁用（Q1 拍板）：代码保留、后端开关关闭、入口隐藏，后续随时可开 | 已定 2026-08-19 |
-| D6 | TrajViz / workbench / labeling worker | 首版不打包、入口禁用；作为后续可选组件（P2 再评估） | 待确认 |
+| D6 | TrajViz / workbench / labeling worker | 首版不打包、入口禁用；作为后续可选组件（P2 再评估）。**M1 已按"首版禁用"方向实施**（traj_viz/workbench 开关 + 前端 gate），开关可逆，待用户最终拍板 | 待确认（按禁用方向实施，2026-08-20） |
 | D7 | 构建环境（Q2） | M2 阶段用手工脚本（build-win.ps1）在 Windows 开发机跑通；M4 再决定流水线（GitHub Actions windows-latest / 内部构建机） | 已定 2026-08-19 |
 | D8 | 数据目录（Q3） | `%USERPROFILE%\DataViewerData`（DATA_ROOT）；元数据/密钥/日志在 `%LOCALAPPDATA%\DataViewerDesktop`；卸载不丢数据 | 已定 2026-08-19 |
 | D9 | 登录体验（Q4） | 保留 admin 登录页 + "记住我"（localStorage 持久化 token），改动最小 | 已定 2026-08-19 |
 | D10 | 补丁工作流（Q5） | 先 `patches/` 迭代（主仓发布节奏不受影响）；M4 起转"主仓直接开分支开发，本仓只做打包" | 已定 2026-08-19 |
 | D11 | 浏览器（Q6） | 首版用系统默认浏览器；捆绑 Chromium 列为 P2 可选 | 已定 2026-08-19 |
+| D12 | capability 契约（M1 实施） | `GET /api/capabilities` 返回**扁平 JSON**（11 键）；前端启动 fetch 一次，**失败兜底全 true**（上游行为不变）；开关关闭 = 前端入口不可见 + 后端 503 "X is unavailable in this deployment" | 已定 2026-08-20 |
+| D13 | format-ops 归属（M1 实施） | convert / validate-atif 是**本地能力**（`config.py` "Pure local capabilities"），**不 gate**；validate-panguml/ml15 依赖 workbench，挂 `workbench` 开关（后端另有 `wc.health()` 动态 503）；"Validation" 一键质检按钮属 datalab-platform，挂 `datalab` | 已定 2026-08-20 |
+| D14 | trajectory.py 归属（M1 实施） | `api/trajectory.py` 全路由（viz serve/labeling/filterable-samples）归 `traj_viz` 开关；SampleBrowser 的 Traj 前端入口未 gate 属已知不一致，D6 拍板后统一 | 已定 2026-08-20 |
+| D15 | zip 编码与 gateway 403（M1 暂缓） | ① zip 无 UTF-8 flag 的 GBK 成员名乱码（`api/files.py:3017`）：修会改变 Linux 现有行为，留作上游 PR 候选；② `GATEWAY_PUSH_ENABLED` 既有强制返回 403 且为 import 时快照，与 capability 体系 503 语义不一致：留待上游化时统一 | 已定 2026-08-20 |
 
 ---
 
@@ -156,6 +160,7 @@ DataViewerDesktop/
 | `uvicorn[standard]` | uvloop Linux only | Windows 自动回退 asyncio，保留 | — |
 
 - 验收：`uv sync --extra none`（新 profiles 方案）在 Windows 上可启动全量 API；上游 Linux 全量依赖行为不变
+- **注意（M1 已实施）**：pyproject 已改（ray/huggingface_hub 移 optional、transformers 移除）但 uv.lock 未同步更新（本机无 uv）——构建机需 `uv sync`（非 frozen）或补跑 `uv lock` 后提交新锁
 
 ### 4.5 能力端点与前端入口隐藏（F12/F13）
 
@@ -254,7 +259,7 @@ sync-upstream.sh:
 | 阶段 | 内容 | 验收标准 | 估计 | 状态 |
 |------|------|----------|------|------|
 | **M0 脚手架** | 本仓结构、sync-upstream 流程、CI 骨架、workspace 同步到上游基线跑通 pytest | Linux 上 patch 流程端到端可用 | 0.5-1 周 | ✅ 完成 2026-08-20：基线锁定 commit `1d2b0df`（上游无 tag）；sync 脚本从零跑通、工作树干净；上游后端 pytest **875/876**（1 个既存失败：`test_report_panguml_shape` 依赖本机 workbench 在线，上游工作树同环境复现，不修）；前端 `npm ci && npm run build` 通过；CI 占位骨架 `ci/linux-pytest.yml` 已落（待 D7/M4 定流水线）。**2026-08-20 基线随上游 HEAD 更新至 v4.13.0 = `cc71d62`**，pytest 基线复核 **882/883**（唯一失败同上） |
-| **M1 适配补丁**（核心风险） | 4.1 路径收敛 → 4.2 spawn → 4.3 内存 → 4.4 依赖拆分 → 4.5 capability → 4.6 认证 → 4.7 降级 | 上游 pytest 全绿 + Linux spawn 模式全绿 + Windows CI pytest 绿 | 2-3 周 | 未开始。前置 spike：Linux 强制 spawn 全量 pytest（§8 风险表第一行），M0 完成即启动 |
+| **M1 适配补丁**（核心风险） | 4.1 路径收敛 → 4.2 spawn → 4.3 内存 → 4.4 依赖拆分 → 4.5 capability → 4.6 认证 → 4.7 降级 | 上游 pytest 全绿 + Linux spawn 模式全绿 + Windows CI pytest 绿 | 2-3 周 | ✅ **主体完成 2026-08-20**：9 个补丁（patches/0001-0009，见 patches/README.md），重放树上 fork **921/1/2**、spawn **921/1/2**（唯一失败 = workbench 离线既存问题，非补丁引入）；前端 build 绿。**遗留**：① Windows CI 验证（M2/构建机，D7）② uv.lock 失配需构建机补 `uv lock` ③ D6 待拍板后统一 SampleBrowser 前端 gate（D14） |
 | **M2 Windows 冒烟** | 绿色包在 Windows 真机跑通核心链路 | 浏览/JSONL/聚合/格式转换/dataset-stats 小任务全过；外网功能不可见 | 1-2 周 | 未开始 |
 | **M3 产品化** | pystray 启动器、Inno Setup、使用说明、日志收集 | 双击安装 → 一键使用；卸载干净 | 1 周 | 未开始 |
 | **M4 持续演进** | 上游 tag 跟随机制、双平台 CI 常态化、补丁上游化节奏 | 每次上游 release 一周内出对应 -d 包 | 持续 | 未开始 |
@@ -267,7 +272,7 @@ sync-upstream.sh:
 
 | 风险 | 影响 | 对策 | 状态 |
 |------|------|------|------|
-| spawn 多进程序列化坑（uvicorn 父进程 + ProcessPoolExecutor） | M1 延期 | M0 结束即做 Linux 强制 spawn 全量验证 spike；池入口全部模块级函数化 | 前置验证 |
+| spawn 多进程序列化坑（uvicorn 父进程 + ProcessPoolExecutor） | M1 延期 | M0 结束即做 Linux 强制 spawn 全量验证 spike；池入口全部模块级函数化 | ✅ **已验证 2026-08-20**：上游代码的"连接纪律"收敛已到位，spawn 全量**零额外失败**（882/1 与 fork 一致）；`DV_MP_START_METHOD=spawn` + `utils/process_context.py` 已入补丁栈 |
 | gigatoken 无 Windows wheel | 统计慢 20-40× | sentencepiece fallback 已内建；同时评估内部编译 Windows wheel | 有兜底 |
 | capability 前端改造面大（File Explorer 入口分散） | UI 改动多 | 先做入口盘点清单，统一 gate 组件，一处注册 | 提前盘点 |
 | 个人 PC 内存（16-32GB）跑不动大统计 | 体验差 | 已有自适应 workers + 内存守卫；文档注明建议配置 | 有兜底 |

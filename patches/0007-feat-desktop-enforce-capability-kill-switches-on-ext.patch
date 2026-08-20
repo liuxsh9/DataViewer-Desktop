@@ -1,0 +1,488 @@
+From 9e91ff0aaf9e9cfebbe3a16e5f14c003bce6c5e2 Mon Sep 17 00:00:00 2001
+From: l00653114 <l00653114@example.com>
+Date: Thu, 20 Aug 2026 11:45:11 +0800
+Subject: [PATCH 7/9] feat(desktop): enforce capability kill switches on
+ external-service APIs
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- router 级 gate：s3/trajlens(claude_terminal/hf_download/arena/distillation)；validation(datalab)；claude_chat/ask_claude(claude)；trajectory(traj_viz)
+- files.py 8 个 scp 路由 route 级 gate（随 4.1 补丁提交）
+- scp_download_manager 服务级守卫（含模块级 resume 块）
+- GATEWAY_PUSH_ENABLED 核实已有 5 处强制（403 语义，未改）
+- 10 个 gate 测试用例
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/api/arena.py                     |   7 +-
+ backend/api/ask_claude.py                |   5 +-
+ backend/api/claude_chat.py               |   5 +-
+ backend/api/claude_terminal.py           |   6 +-
+ backend/api/distillation.py              |  12 ++-
+ backend/api/hf_download.py               |   5 +-
+ backend/api/s3.py                        |   5 +-
+ backend/api/trajectory.py                |   9 +-
+ backend/api/trajlens.py                  |   5 +-
+ backend/api/validation.py                |   6 +-
+ backend/services/scp_download_manager.py |  41 +++++---
+ backend/tests/test_capability_gates.py   | 121 +++++++++++++++++++++++
+ 12 files changed, 197 insertions(+), 30 deletions(-)
+ create mode 100644 backend/tests/test_capability_gates.py
+
+diff --git a/backend/api/arena.py b/backend/api/arena.py
+index 1682922..5215628 100644
+--- a/backend/api/arena.py
++++ b/backend/api/arena.py
+@@ -13,10 +13,15 @@ from pydantic import BaseModel
+ from database.arena_db import arena_db
+ from services.arena_executor import arena_executor
+ from api.auth import get_current_user
++from api.capabilities import require_capability
+ from middleware.permissions import require_role
+ 
+ logger = logging.getLogger(__name__)
+-router = APIRouter(prefix="/arena", tags=["arena"])
++router = APIRouter(
++    prefix="/arena",
++    tags=["arena"],
++    dependencies=[Depends(require_capability("arena"))],
++)
+ 
+ 
+ # ==================== Request Models ====================
+diff --git a/backend/api/ask_claude.py b/backend/api/ask_claude.py
+index 26c7eed..ff785eb 100644
+--- a/backend/api/ask_claude.py
++++ b/backend/api/ask_claude.py
+@@ -2,7 +2,7 @@
+ Ask Claude API - Structured AI data processing tasks
+ Runs Claude Code non-interactively with constrained prompts and sandboxed execution.
+ """
+-from fastapi import APIRouter, HTTPException, Request
++from fastapi import APIRouter, HTTPException, Request, Depends
+ from fastapi.responses import StreamingResponse
+ from pydantic import BaseModel
+ from typing import Optional, Dict
+@@ -17,10 +17,11 @@ from utils.timezone_utils import now_iso
+ from utils.claude_subprocess import run_claude_subprocess
+ 
+ from services.ask_claude_task_manager import ask_claude_task_manager
++from api.capabilities import require_capability
+ 
+ logger = logging.getLogger(__name__)
+ 
+-router = APIRouter()
++router = APIRouter(dependencies=[Depends(require_capability("claude"))])
+ 
+ from config import DATA_ROOT
+ 
+diff --git a/backend/api/claude_chat.py b/backend/api/claude_chat.py
+index 6095433..544bc7b 100644
+--- a/backend/api/claude_chat.py
++++ b/backend/api/claude_chat.py
+@@ -2,7 +2,7 @@
+ Claude Chat API - Multi-turn conversation with Claude Code.
+ Each turn launches a `claude -p` subprocess with --continue for session continuity.
+ """
+-from fastapi import APIRouter, HTTPException, Request
++from fastapi import APIRouter, HTTPException, Request, Depends
+ from fastapi.responses import StreamingResponse
+ from pydantic import BaseModel
+ from typing import Optional, Dict
+@@ -18,10 +18,11 @@ from utils.timezone_utils import now_iso
+ from utils.claude_subprocess import run_claude_subprocess
+ 
+ from services.conversation_manager import conversation_manager
++from api.capabilities import require_capability
+ 
+ logger = logging.getLogger(__name__)
+ 
+-router = APIRouter()
++router = APIRouter(dependencies=[Depends(require_capability("claude"))])
+ 
+ from config import DATA_ROOT
+ 
+diff --git a/backend/api/claude_terminal.py b/backend/api/claude_terminal.py
+index 4debe1e..a54da1e 100644
+--- a/backend/api/claude_terminal.py
++++ b/backend/api/claude_terminal.py
+@@ -2,7 +2,7 @@
+ Claude Code Terminal WebSocket API
+ Provides real-time terminal access to Claude Code for specific directories
+ """
+-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
++from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
+ from pydantic import BaseModel
+ from typing import Dict, Optional
+ import asyncio
+@@ -19,7 +19,9 @@ import struct
+ import fcntl
+ import jwt
+ 
+-router = APIRouter()
++from api.capabilities import require_capability
++
++router = APIRouter(dependencies=[Depends(require_capability("claude"))])
+ 
+ # Session management
+ active_sessions: Dict[str, dict] = {}
+diff --git a/backend/api/distillation.py b/backend/api/distillation.py
+index 54e91b8..70d0ea0 100644
+--- a/backend/api/distillation.py
++++ b/backend/api/distillation.py
+@@ -1,7 +1,7 @@
+ """
+ Distillation API endpoints
+ """
+-from fastapi import APIRouter, HTTPException, BackgroundTasks
++from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+ from pydantic import BaseModel
+ from typing import Optional, List, Dict, Any
+ from pathlib import Path
+@@ -17,8 +17,14 @@ from services.distillation_template_manager import distillation_template_manager
+ from services.distillation_preprocessor import create_preprocessor
+ from services.distillation_postprocessor import create_postprocessor
+ from services.distillation_validator import create_validator
+-
+-router = APIRouter()
++from api.capabilities import require_capability
++
++# The whole distillation feature rides on the volcengine capability switch
++# (config.VOLCENGINE_ENABLED): api-config entries are "openai"/"volcengine"
++# and MultiAPIDistiller makes the LLM calls (volcenginesdkarkruntime). The
++# router-level dependency 503s config/template management too — a disabled
++# deployment must not even expose distillation bookkeeping.
++router = APIRouter(dependencies=[Depends(require_capability("volcengine"))])
+ 
+ from config import DATA_ROOT
+ 
+diff --git a/backend/api/hf_download.py b/backend/api/hf_download.py
+index 63ef827..3afb228 100644
+--- a/backend/api/hf_download.py
++++ b/backend/api/hf_download.py
+@@ -1,7 +1,7 @@
+ """
+ Hugging Face Download API endpoints
+ """
+-from fastapi import APIRouter, HTTPException, BackgroundTasks
++from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+ from pydantic import BaseModel
+ from typing import Optional, List
+ import sys
+@@ -10,8 +10,9 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
+ sys.path.insert(0, str(BACKEND_DIR))
+ 
+ from services import hf_download_manager
++from api.capabilities import require_capability
+ 
+-router = APIRouter(prefix="/api/hf", tags=["hf_download"])
++router = APIRouter(prefix="/api/hf", tags=["hf_download"], dependencies=[Depends(require_capability("hf"))])
+ 
+ 
+ class DownloadRequest(BaseModel):
+diff --git a/backend/api/s3.py b/backend/api/s3.py
+index 93be02a..ea9f8c4 100644
+--- a/backend/api/s3.py
++++ b/backend/api/s3.py
+@@ -1,7 +1,7 @@
+ """
+ S3 API endpoints for download/upload operations
+ """
+-from fastapi import APIRouter, HTTPException, BackgroundTasks
++from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+ from pydantic import BaseModel
+ from typing import Optional, List
+ import subprocess
+@@ -14,8 +14,9 @@ from services.s3_config import get_config, save_config, get_all_configs, delete_
+ from services import task_manager
+ import uuid
+ import time
++from api.capabilities import require_capability
+ 
+-router = APIRouter()
++router = APIRouter(dependencies=[Depends(require_capability("s3"))])
+ 
+ S3_SCRIPTS_DIR = Path(__file__).parent.parent.parent / "s3_scripts"
+ from config import DATA_ROOT, LOG_DIR
+diff --git a/backend/api/trajectory.py b/backend/api/trajectory.py
+index 62a6174..d8847a5 100644
+--- a/backend/api/trajectory.py
++++ b/backend/api/trajectory.py
+@@ -13,14 +13,19 @@ import hashlib
+ import hmac
+ 
+ import httpx
+-from fastapi import APIRouter, Body, HTTPException, Query
++from fastapi import APIRouter, Body, HTTPException, Query, Depends
+ from fastapi.responses import FileResponse
+ from pydantic import BaseModel
+ 
+ from database.data_version_db import data_version_db
+ 
+ logger = logging.getLogger(__name__)
+-router = APIRouter()
++
++from api.capabilities import require_capability
++# This router is the trajectory viz / labeling subsystem (serve tokens,
++# training labeler, filterable samples) — traj_viz capability (D6 direction:
++# not packaged in the first desktop build).
++router = APIRouter(dependencies=[Depends(require_capability("traj_viz"))])
+ 
+ from config import DATA_ROOT, TRAINING_LABELER_PATH, TRAJ_VIZ_SERVE_SECRET as _SERVE_SECRET, LABELING_WORKER_PORT, LABEL_BASE_URL, LABEL_API_KEY, LABEL_MODEL
+ 
+diff --git a/backend/api/trajlens.py b/backend/api/trajlens.py
+index 5ade6ca..24f818f 100644
+--- a/backend/api/trajlens.py
++++ b/backend/api/trajlens.py
+@@ -4,12 +4,13 @@ Forwards requests to traj-lens service with auth token injection,
+ so the frontend never handles TRAJLENS_INGEST_TOKEN directly.
+ """
+ import httpx
+-from fastapi import APIRouter, HTTPException
++from fastapi import APIRouter, HTTPException, Depends
+ from pydantic import BaseModel
+ from config import TRAJLENS_URL, TRAJLENS_INGEST_TOKEN, TRAJLENS_INGEST_ROOTS, DATA_ROOT
+ from pathlib import Path
++from api.capabilities import require_capability
+ 
+-router = APIRouter()
++router = APIRouter(dependencies=[Depends(require_capability("traj_viz"))])
+ 
+ 
+ class IngestRequest(BaseModel):
+diff --git a/backend/api/validation.py b/backend/api/validation.py
+index 66a5c38..d08c10d 100644
+--- a/backend/api/validation.py
++++ b/backend/api/validation.py
+@@ -47,7 +47,11 @@ from services.validation_preferences import (
+ )
+ 
+ logger = logging.getLogger(__name__)
+-router = APIRouter()
++
++from api.capabilities import require_capability
++# The whole router is the datalab-platform quality check (D4: disabled in the
++# desktop build) — gate at router level so every endpoint 503s when off.
++router = APIRouter(dependencies=[Depends(require_capability("datalab"))])
+ 
+ from config import DATA_ROOT, DATALAB_PLATFORM_URL
+ 
+diff --git a/backend/services/scp_download_manager.py b/backend/services/scp_download_manager.py
+index 20f45cb..effc063 100644
+--- a/backend/services/scp_download_manager.py
++++ b/backend/services/scp_download_manager.py
+@@ -15,9 +15,22 @@ from typing import Dict, List, Optional
+ from dataclasses import dataclass, asdict
+ 
+ from services.unified_task_manager import UnifiedTaskManager
++import config
+ 
+ logger = logging.getLogger(__name__)
+ 
++
++def _ensure_scp_enabled() -> None:
++    """Raise when the SCP capability is disabled for this deployment.
++
++    Reads ``config.SCP_ENABLED`` at call time (not import time) so a runtime
++    switch flip takes effect immediately. The API routes additionally 503 via
++    ``require_capability("scp")`` before this layer is reached; this guard
++    protects direct service callers (background workers, tests, scripts).
++    """
++    if not config.SCP_ENABLED:
++        raise RuntimeError("SCP download is unavailable in this deployment")
++
+ # Storage paths
+ BACKEND_DIR = Path(__file__).resolve().parent.parent
+ _STORE_DIR = str(BACKEND_DIR / "data" / "tasks" / "scp_download")
+@@ -97,6 +110,7 @@ def create_download_task(
+     remote_path: str,
+     target_path: str,
+ ) -> Dict:
++    _ensure_scp_enabled()
+     _validate_scp_inputs(server_ip, username, remote_path)
+ 
+     task_id = generate_task_id()
+@@ -371,6 +385,7 @@ def cancel_task(task_id: str) -> bool:
+ 
+ 
+ def get_task(task_id: str) -> Optional[Dict]:
++    _ensure_scp_enabled()
+     task = _mgr.get_task(task_id)
+     if task:
+         return _strip_password(task)
+@@ -378,10 +393,12 @@ def get_task(task_id: str) -> Optional[Dict]:
+ 
+ 
+ def get_all_tasks() -> List[Dict]:
++    _ensure_scp_enabled()
+     return [_strip_password(t) for t in _mgr.get_active_tasks()]
+ 
+ 
+ def get_task_history(limit: int = 50) -> List[Dict]:
++    _ensure_scp_enabled()
+     return [_strip_password(t) for t in _mgr.get_all_tasks(limit=limit)]
+ 
+ 
+@@ -454,17 +471,19 @@ def delete_server(name: str) -> bool:
+     return False
+ 
+ 
+-# Resume tasks on module import
+-for task in _mgr.get_active_tasks():
+-    status = task.get("status")
+-    if status == "running":
+-        _mgr.update_task(task["task_id"], {
+-            "status": "failed",
+-            "error": "Service restarted",
+-            "end_time": time.time(),
+-        })
+-    elif status == "pending":
+-        transfer_queue.append(task["task_id"])
++# Resume tasks on module import — only when the SCP capability is enabled, so
++# a disabled deployment never restarts queued transfers.
++if config.SCP_ENABLED:
++    for task in _mgr.get_active_tasks():
++        status = task.get("status")
++        if status == "running":
++            _mgr.update_task(task["task_id"], {
++                "status": "failed",
++                "error": "Service restarted",
++                "end_time": time.time(),
++            })
++        elif status == "pending":
++            transfer_queue.append(task["task_id"])
+ 
+ if transfer_queue:
+     _start_transfer_processor()
+\ No newline at end of file
+diff --git a/backend/tests/test_capability_gates.py b/backend/tests/test_capability_gates.py
+new file mode 100644
+index 0000000..2dce9c0
+--- /dev/null
++++ b/backend/tests/test_capability_gates.py
+@@ -0,0 +1,121 @@
++"""Capability-gate tests for externally switchable routers (M1 4.7).
++
++Routers of external-service capabilities (s3, traj_viz, claude, hf, arena,
++volcengine) carry a router-level ``require_capability`` dependency
++(api/capabilities.py) that 503s every route before its handler runs when the
++switch is off. Each test builds a minimal FastAPI app with the real router
++(mirroring test_capabilities_api.py) and asserts: switch on → pre-existing
++behavior unchanged; switch off → 503 "<name> is unavailable in this
++deployment".
++
++Not covered here by design:
++- gateway: already enforced with the legacy ``GATEWAY_PUSH_ENABLED`` 403
++  check in api/gateway_push.py (push and pull routes in the same router).
++- scp route gates: api/files.py (another workstream) gates /scp-download and
++  /scp-tasks; the service-level guard in services/scp_download_manager.py is
++  unit-tested below.
++"""
++
++import sys
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
++
++import pytest
++from fastapi import FastAPI
++from starlette.testclient import TestClient
++from starlette.websockets import WebSocketDisconnect
++
++import config
++from api import arena, claude_terminal, distillation, hf_download, s3, trajlens
++from services import scp_download_manager
++
++
++def _capabilities_with(name: str, value: bool) -> dict:
++    patched = dict(config.CAPABILITIES)
++    patched[name] = value
++    return patched
++
++
++def _client(router, prefix: str) -> TestClient:
++    app = FastAPI()
++    app.include_router(router, prefix=prefix)
++    return TestClient(app)
++
++
++# One case per gated router. ``path``/``method``/``body`` pick the lightest
++# route in each router (read-only or validation-only), and ``enabled_status``
++# is its pre-gate behavior — asserting it proves the gate is a no-op when on.
++ROUTER_CASES = [
++    # (router, prefix, capability, path, method, body, enabled_status)
++    (s3.router, "/api/s3", "s3", "/api/s3/tasks", "get", None, 200),
++    (trajlens.router, "/api", "traj_viz", "/api/trajlens/ingest", "post", {}, 422),
++    (claude_terminal.router, "/api/claude-terminal", "claude", "/api/claude-terminal/sessions", "get", None, 200),
++    (hf_download.router, "", "hf", "/api/hf/tasks", "get", None, 200),
++    (arena.router, "/api", "arena", "/api/arena/models", "get", None, 401),
++    (distillation.router, "", "volcengine", "/api/distillation/tasks", "get", None, 200),
++]
++
++
++@pytest.mark.parametrize(
++    "router,prefix,cap,path,method,body,enabled_status",
++    ROUTER_CASES,
++    ids=[c[2] for c in ROUTER_CASES],
++)
++def test_router_gate(router, prefix, cap, path, method, body, enabled_status, monkeypatch):
++    client = _client(router, prefix)
++
++    # Switch on: pre-existing behavior, the gate must be a no-op.
++    resp = client.request(method, path, json=body) if body is not None else client.request(method, path)
++    assert resp.status_code == enabled_status
++
++    # Switch off: explicit 503 before any handler (and any auth) runs.
++    monkeypatch.setattr(config, "CAPABILITIES", _capabilities_with(cap, False))
++    resp = client.request(method, path, json=body) if body is not None else client.request(method, path)
++    assert resp.status_code == 503
++    assert resp.json()["detail"] == f"{cap} is unavailable in this deployment"
++
++
++def test_claude_terminal_websocket_gated(monkeypatch):
++    """The terminal WebSocket is gated by the same router dependency.
++
++    The dependency runs before the endpoint (which would accept the socket),
++    so Starlette's exception middleware answers the handshake with a close —
++    the client sees a disconnect instead of a session.
++    """
++    client = _client(claude_terminal.router, "/api/claude-terminal")
++    monkeypatch.setattr(config, "CAPABILITIES", _capabilities_with("claude", False))
++    with pytest.raises(WebSocketDisconnect):
++        with client.websocket_connect("/api/claude-terminal/ws/project"):
++            pass
++
++
++class TestScpServiceGuard:
++    """Service-level SCP guard (services/scp_download_manager.py).
++
++    Route-level 503s for /scp-download and /scp-tasks live in api/files.py
++    (another workstream); this guard raises a clear error for direct service
++    callers. The enabled path is exercised only on read functions — creating
++    a task would spawn real rsync transfers.
++    """
++
++    def test_create_download_task_disabled(self, monkeypatch):
++        monkeypatch.setattr(config, "SCP_ENABLED", False)
++        with pytest.raises(RuntimeError, match="SCP download is unavailable in this deployment"):
++            scp_download_manager.create_download_task(
++                "10.0.0.1", "user", "pw", "/remote/data", "/local/data")
++
++    def test_read_functions_disabled(self, monkeypatch):
++        monkeypatch.setattr(config, "SCP_ENABLED", False)
++        with pytest.raises(RuntimeError, match="SCP download is unavailable in this deployment"):
++            scp_download_manager.get_task("scp_missing")
++        with pytest.raises(RuntimeError, match="SCP download is unavailable in this deployment"):
++            scp_download_manager.get_all_tasks()
++        with pytest.raises(RuntimeError, match="SCP download is unavailable in this deployment"):
++            scp_download_manager.get_task_history()
++
++    def test_enabled_read_behavior_unchanged(self):
++        # Empty store → the same results as before the guard existed.
++        assert scp_download_manager.get_task("scp_missing") is None
++        assert scp_download_manager.get_task_history() == []
++        assert scp_download_manager._ensure_scp_enabled() is None
+-- 
+2.43.0
+

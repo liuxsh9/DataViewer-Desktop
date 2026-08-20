@@ -1,0 +1,428 @@
+From 937b9008ad315f05dd41f26e4db1c1b1ee8fd54c Mon Sep 17 00:00:00 2001
+From: l00653114 <l00653114@example.com>
+Date: Thu, 20 Aug 2026 11:44:52 +0800
+Subject: [PATCH 3/9] feat(desktop): converge /data path joins to
+ config.resolve_abs_path/strip_data_root
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- DB 存相对路径、运行时拼 DATA_ROOT，替换 f"/data/{p}" 硬编码（7 文件）
+- zip 成员名用 as_posix()：修复 Windows 上反斜杠成员名的解压问题
+- 安全校验（safe_path/越界 guard）与 Linux 行为不变
+- 顺带包含 files.py 的 scp 路由 capability gate（与 4.7 补丁配套）
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/api/data_versions.py      |  3 ++-
+ backend/api/dataset_builder.py    |  6 +++---
+ backend/api/files.py              | 28 ++++++++++++++++++----------
+ backend/api/metadata.py           | 15 ++++++++-------
+ backend/api/models.py             |  3 ++-
+ backend/database/model_manager.py | 12 ++++++++----
+ backend/database/models.py        | 19 ++++++++++++-------
+ 7 files changed, 53 insertions(+), 33 deletions(-)
+
+diff --git a/backend/api/data_versions.py b/backend/api/data_versions.py
+index ff45a25..93f2195 100644
+--- a/backend/api/data_versions.py
++++ b/backend/api/data_versions.py
+@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
+ from pydantic import BaseModel
+ from typing import Optional, List
+ from database.data_version_db import data_version_db
++from config import resolve_abs_path
+ import json
+ import linecache
+ from pathlib import Path
+@@ -746,7 +747,7 @@ def get_sample_labels_by_file(path: str, line_numbers: str = ""):
+ 
+     # Normalize path for dataset matching: ensure /data/ prefix
+     # Frontend sends relative paths (e.g. Xiaoshuang/...) but DB stores /data/Xiaoshuang/...
+-    match_path = path if path.startswith("/data/") else f"/data/{path.lstrip('/')}"
++    match_path = path if path.startswith("/data/") else resolve_abs_path(path)
+     dataset = data_version_db.find_dataset_by_file_path(match_path)
+     if not dataset:
+         return {"labels": {}, "dataset": None}
+diff --git a/backend/api/dataset_builder.py b/backend/api/dataset_builder.py
+index 80e210f..a79ef48 100644
+--- a/backend/api/dataset_builder.py
++++ b/backend/api/dataset_builder.py
+@@ -9,7 +9,7 @@ import shutil
+ import random
+ from pathlib import Path
+ 
+-from config import DATA_ROOT
++from config import DATA_ROOT, resolve_abs_path
+ 
+ 
+ router = APIRouter(prefix="/dataset", tags=["dataset"])
+@@ -40,7 +40,7 @@ async def build_dataset(request: DatasetBuildRequest):
+             raise HTTPException(status_code=400, detail="Invalid dataset name")
+ 
+         # Create dataset folder
+-        dataset_path = f"/data/{request.dataset_name}"
++        dataset_path = resolve_abs_path(request.dataset_name)
+         if os.path.exists(dataset_path):
+             raise HTTPException(status_code=400, detail=f"Dataset '{request.dataset_name}' already exists")
+ 
+@@ -49,7 +49,7 @@ async def build_dataset(request: DatasetBuildRequest):
+         # Process each file
+         results = []
+         for file_path in request.file_paths:
+-            source_path = f"/data/{file_path}" if not file_path.startswith('/data/') else file_path
++            source_path = resolve_abs_path(file_path) if not file_path.startswith('/data/') else file_path
+ 
+             if not os.path.exists(source_path):
+                 results.append({
+diff --git a/backend/api/files.py b/backend/api/files.py
+index f5eaf8d..baf40d1 100644
+--- a/backend/api/files.py
++++ b/backend/api/files.py
+@@ -2,7 +2,7 @@
+ File operation API endpoints
+ Handles file browsing, operations, and JSONL file viewing
+ """
+-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Body, Request
++from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Body, Request, Depends
+ from fastapi.responses import FileResponse, StreamingResponse, Response
+ from typing import Optional, List, Dict, Union
+ from pydantic import BaseModel, Field
+@@ -30,6 +30,7 @@ sys.path.insert(0, str(BACKEND_DIR))
+ from services import url_download_manager
+ from services.writeback_service import _acquire_lock, _release_lock
+ from services import scp_download_manager
++from api.capabilities import require_capability
+ from services import parquet_conversion_manager
+ from services.data_version_manager import compute_canonical_hash
+ from database.data_version_db import data_version_db
+@@ -3917,7 +3918,11 @@ async def download_folder(path: str = "", request: Request = None):
+             for root, dirs, files in os.walk(target_path):
+                 for fname in files:
+                     fpath = Path(root) / fname
+-                    arcname = str(fpath.relative_to(target_path))
++                    # ZIP member names must use POSIX separators: on Windows
++                    # Path.__str__ yields backslashes, which extractors treat
++                    # as a literal "fake directory" name. as_posix() is a no-op
++                    # on Linux, so behavior there is unchanged.
++                    arcname = fpath.relative_to(target_path).as_posix()
+                     file_list.append((fpath, arcname))
+ 
+             # Use a pipe-based approach: write ZIP to a pipe, read from it
+@@ -6100,7 +6105,10 @@ async def render_html(session_id: str, filename: str):
+ # SCP Download endpoints
+ # ------------------------------------------------------------------
+ 
+-@router.post("/scp-download")
++# Desktop kill switch: every SCP endpoint 503s when the capability is off.
++_SCP_DEP = [Depends(require_capability("scp"))]
++
++@router.post("/scp-download", dependencies=_SCP_DEP)
+ async def create_scp_download(request: ScpDownloadRequest):
+     """Create an SCP download task to pull files from a remote server."""
+     try:
+@@ -6137,7 +6145,7 @@ async def create_scp_download(request: ScpDownloadRequest):
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+-@router.get("/scp-tasks")
++@router.get("/scp-tasks", dependencies=_SCP_DEP)
+ async def get_scp_tasks():
+     """Get all active SCP transfer tasks."""
+     try:
+@@ -6151,7 +6159,7 @@ async def get_scp_tasks():
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+-@router.get("/scp-task/{task_id}")
++@router.get("/scp-task/{task_id}", dependencies=_SCP_DEP)
+ async def get_scp_task(task_id: str):
+     """Get specific SCP transfer task status."""
+     try:
+@@ -6166,7 +6174,7 @@ async def get_scp_task(task_id: str):
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+-@router.post("/scp-task/{task_id}/cancel")
++@router.post("/scp-task/{task_id}/cancel", dependencies=_SCP_DEP)
+ async def cancel_scp_task(task_id: str):
+     """Cancel a running SCP transfer task."""
+     try:
+@@ -6180,7 +6188,7 @@ async def cancel_scp_task(task_id: str):
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+-@router.delete("/scp-task/{task_id}")
++@router.delete("/scp-task/{task_id}", dependencies=_SCP_DEP)
+ async def delete_scp_task(task_id: str):
+     """Delete an SCP transfer task record."""
+     try:
+@@ -6194,7 +6202,7 @@ async def delete_scp_task(task_id: str):
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+-@router.get("/scp-servers")
++@router.get("/scp-servers", dependencies=_SCP_DEP)
+ async def get_scp_servers():
+     """List saved SCP server configurations."""
+     try:
+@@ -6206,7 +6214,7 @@ async def get_scp_servers():
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+-@router.post("/scp-servers")
++@router.post("/scp-servers", dependencies=_SCP_DEP)
+ async def save_scp_server(request: ScpServerRequest):
+     """Save an SCP server configuration."""
+     try:
+@@ -6223,7 +6231,7 @@ async def save_scp_server(request: ScpServerRequest):
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
+-@router.delete("/scp-servers/{name}")
++@router.delete("/scp-servers/{name}", dependencies=_SCP_DEP)
+ async def delete_scp_server(name: str):
+     """Delete a saved SCP server configuration."""
+     try:
+diff --git a/backend/api/metadata.py b/backend/api/metadata.py
+index 5bf4a24..515ff37 100644
+--- a/backend/api/metadata.py
++++ b/backend/api/metadata.py
+@@ -9,6 +9,7 @@ from pathlib import Path
+ sys.path.append(str(Path(__file__).parent.parent))
+ from database.models import db
+ from utils.jsonl_stats import get_jsonl_stats, analyze_jsonl_format
++from config import resolve_abs_path
+ import os
+ 
+ 
+@@ -47,7 +48,7 @@ async def get_file_metadata(file_path: str):
+         if not metadata:
+             # File doesn't have metadata yet, return empty metadata with auto-stats if JSONL
+             if file_path.endswith('.jsonl'):
+-                full_path = f"/data/{file_path}" if not file_path.startswith('/data/') else file_path
++                full_path = resolve_abs_path(file_path) if not file_path.startswith('/data/') else file_path
+                 if os.path.exists(full_path):
+                     auto_stats = get_jsonl_stats(full_path)
+                     return {
+@@ -76,7 +77,7 @@ async def set_file_metadata(data: FileMetadata):
+         # Auto-generate stats for JSONL files
+         auto_stats = None
+         if data.file_path.endswith('.jsonl'):
+-            full_path = f"/data/{data.file_path}" if not data.file_path.startswith('/data/') else data.file_path
++            full_path = resolve_abs_path(data.file_path) if not data.file_path.startswith('/data/') else data.file_path
+             if os.path.exists(full_path):
+                 auto_stats = get_jsonl_stats(full_path)
+ 
+@@ -96,7 +97,7 @@ async def update_file_metadata(file_path: str = Body(..., embed=True), metadata:
+         # Auto-generate stats for JSONL files
+         auto_stats = None
+         if file_path.endswith('.jsonl'):
+-            full_path = f"/data/{file_path}" if not file_path.startswith('/data/') else file_path
++            full_path = resolve_abs_path(file_path) if not file_path.startswith('/data/') else file_path
+             if os.path.exists(full_path):
+                 auto_stats = get_jsonl_stats(full_path)
+ 
+@@ -158,7 +159,7 @@ async def batch_update_metadata(updates: List[FileMetadata]):
+             # Auto-generate stats for JSONL files
+             auto_stats = None
+             if item.file_path.endswith('.jsonl'):
+-                full_path = f"/data/{item.file_path}" if not item.file_path.startswith('/data/') else item.file_path
++                full_path = resolve_abs_path(item.file_path) if not item.file_path.startswith('/data/') else item.file_path
+                 if os.path.exists(full_path):
+                     auto_stats = get_jsonl_stats(full_path)
+ 
+@@ -180,7 +181,7 @@ async def get_file_stats(file_path: str):
+         if not file_path.endswith('.jsonl'):
+             raise HTTPException(status_code=400, detail="Only JSONL files are supported")
+ 
+-        full_path = f"/data/{file_path}" if not file_path.startswith('/data/') else file_path
++        full_path = resolve_abs_path(file_path) if not file_path.startswith('/data/') else file_path
+ 
+         if not os.path.exists(full_path):
+             raise HTTPException(status_code=404, detail="File not found")
+@@ -200,7 +201,7 @@ async def analyze_file_format(file_path: str, sample_size: int = 10):
+         if not file_path.endswith('.jsonl'):
+             raise HTTPException(status_code=400, detail="Only JSONL files are supported")
+ 
+-        full_path = f"/data/{file_path}" if not file_path.startswith('/data/') else file_path
++        full_path = resolve_abs_path(file_path) if not file_path.startswith('/data/') else file_path
+ 
+         if not os.path.exists(full_path):
+             raise HTTPException(status_code=404, detail="File not found")
+@@ -228,7 +229,7 @@ async def refresh_auto_stats(file_paths: List[str] = Body(..., embed=True)):
+                 continue
+ 
+             # Regenerate stats
+-            full_path = f"/data/{file_path}" if not file_path.startswith('/data/') else file_path
++            full_path = resolve_abs_path(file_path) if not file_path.startswith('/data/') else file_path
+             if os.path.exists(full_path):
+                 auto_stats = get_jsonl_stats(full_path)
+                 result = db.set_file_metadata(file_path, existing['metadata'], auto_stats)
+diff --git a/backend/api/models.py b/backend/api/models.py
+index 05ee75d..e73fe89 100644
+--- a/backend/api/models.py
++++ b/backend/api/models.py
+@@ -14,6 +14,7 @@ from pathlib import Path
+ sys.path.append(str(Path(__file__).parent.parent))
+ from database.model_manager import model_manager
+ from utils.http_headers import content_disposition_attachment
++from config import resolve_abs_path
+ 
+ 
+ router = APIRouter(prefix="/models", tags=["models"])
+@@ -517,7 +518,7 @@ async def add_evaluation(model_id: str, evaluation: EvaluationCreate):
+         if evaluation.excel_file_path:
+             full_path = evaluation.excel_file_path
+             if not full_path.startswith('/'):
+-                full_path = f"/data/{full_path}"
++                full_path = resolve_abs_path(full_path)
+ 
+             if os.path.exists(full_path) and full_path.endswith(('.xlsx', '.xls')):
+                 try:
+diff --git a/backend/database/model_manager.py b/backend/database/model_manager.py
+index 7d5f131..328a637 100644
+--- a/backend/database/model_manager.py
++++ b/backend/database/model_manager.py
+@@ -516,6 +516,7 @@ class ModelManager:
+         """Associate a dataset with a model
+         Note: Each model can only have ONE dataset per tag type
+         """
++        from config import resolve_abs_path
+         conn = self._get_connection()
+         cursor = conn.cursor()
+ 
+@@ -536,7 +537,7 @@ class ModelManager:
+ 
+         # Calculate file hash if it exists
+         dataset_hash = None
+-        full_path = dataset_path if dataset_path.startswith('/') else f"/data/{dataset_path}"
++        full_path = dataset_path if dataset_path.startswith('/') else resolve_abs_path(dataset_path)
+         if os.path.exists(full_path):
+             if os.path.isfile(full_path):
+                 dataset_hash = self._calculate_file_hash(full_path)
+@@ -567,12 +568,13 @@ class ModelManager:
+     def update_dataset_association(self, model_id: str, old_tag_id: str,
+                                    new_dataset_path: str, notes: str = None) -> Dict:
+         """Update dataset for a specific tag (replace existing)"""
++        from config import resolve_abs_path
+         conn = self._get_connection()
+         cursor = conn.cursor()
+ 
+         # Calculate new file hash
+         dataset_hash = None
+-        full_path = new_dataset_path if new_dataset_path.startswith('/') else f"/data/{new_dataset_path}"
++        full_path = new_dataset_path if new_dataset_path.startswith('/') else resolve_abs_path(new_dataset_path)
+         if os.path.exists(full_path):
+             if os.path.isfile(full_path):
+                 dataset_hash = self._calculate_file_hash(full_path)
+@@ -1391,6 +1393,7 @@ class ModelManager:
+     # File tracking and monitoring
+     def check_and_update_file_status(self) -> Dict:
+         """Check all tracked files and update their status"""
++        from config import resolve_abs_path
+         conn = self._get_connection()
+         cursor = conn.cursor()
+ 
+@@ -1411,7 +1414,7 @@ class ModelManager:
+             path = dataset['dataset_path']
+             old_hash = dataset['dataset_hash']
+ 
+-            full_path = path if path.startswith('/') else f"/data/{path}"
++            full_path = path if path.startswith('/') else resolve_abs_path(path)
+ 
+             if os.path.exists(full_path):
+                 # File exists, check if it's the same
+@@ -1512,7 +1515,8 @@ class ModelManager:
+ 
+     def _check_file_exists(self, file_path: str) -> bool:
+         """Check if a file or directory exists"""
+-        full_path = file_path if file_path.startswith('/') else f"/data/{file_path}"
++        from config import resolve_abs_path
++        full_path = file_path if file_path.startswith('/') else resolve_abs_path(file_path)
+         return os.path.exists(full_path)
+ 
+     def _track_file(self, file_path: str, file_hash: str):
+diff --git a/backend/database/models.py b/backend/database/models.py
+index 7aecac8..31bfc0a 100644
+--- a/backend/database/models.py
++++ b/backend/database/models.py
+@@ -127,6 +127,7 @@ class MetadataDB:
+ 
+     def _migrate_old_schema(self, cursor):
+         """Migrate old schema (file_path as primary key) to new schema (file_id as primary key)"""
++        from config import resolve_abs_path
+         print("Migrating metadata database to new schema...")
+ 
+         # Create temporary table with old data
+@@ -163,7 +164,7 @@ class MetadataDB:
+ 
+             # Try to calculate file hash if file exists
+             file_hash = None
+-            full_path = f"/data/{file_path}" if not file_path.startswith('/data/') else file_path
++            full_path = resolve_abs_path(file_path) if not file_path.startswith('/data/') else file_path
+             if os.path.exists(full_path):
+                 file_hash = self._calculate_file_hash(full_path)
+ 
+@@ -202,11 +203,12 @@ class MetadataDB:
+ 
+     def _extract_file_info(self, file_path: str) -> tuple:
+         """Extract file name and calculate hash from file path"""
++        from config import resolve_abs_path
+         file_name = os.path.basename(file_path)
+ 
+         # Try to calculate hash if file exists
+         file_hash = None
+-        full_path = f"/data/{file_path}" if not file_path.startswith('/data/') else file_path
++        full_path = resolve_abs_path(file_path) if not file_path.startswith('/data/') else file_path
+         if os.path.exists(full_path):
+             file_hash = self._calculate_file_hash(full_path)
+ 
+@@ -606,12 +608,13 @@ class MetadataDB:
+         Returns:
+             List of file metadata for potentially moved files
+         """
++        from config import resolve_abs_path
+         all_files = self.get_all_file_metadata()
+         moved_files = []
+ 
+         for file_data in all_files:
+             file_path = file_data['file_path']
+-            full_path = f"/data/{file_path}" if not file_path.startswith('/data/') else file_path
++            full_path = resolve_abs_path(file_path) if not file_path.startswith('/data/') else file_path
+ 
+             if not os.path.exists(full_path):
+                 moved_files.append(file_data)
+@@ -642,11 +645,13 @@ class MetadataDB:
+         file_name = row[0]
+         file_hash = row[1]
+ 
+-        # Search for files with matching name in /data directory
++        from config import DATA_ROOT
++
++        # Search for files with matching name in the DATA_ROOT directory
+         suggestions = []
+ 
+         try:
+-            for root, dirs, files in os.walk('/data'):
++            for root, dirs, files in os.walk(DATA_ROOT):
+                 if file_name in files:
+                     candidate_path = os.path.join(root, file_name)
+                     # Calculate hash if we have the original hash
+@@ -654,11 +659,11 @@ class MetadataDB:
+                         candidate_hash = self._calculate_file_hash(candidate_path)
+                         if candidate_hash == file_hash:
+                             # Convert to relative path
+-                            relative_path = candidate_path.replace('/data/', '')
++                            relative_path = candidate_path.replace(DATA_ROOT + os.sep, '')
+                             suggestions.append(relative_path)
+                     else:
+                         # No hash to compare, just add by name
+-                        relative_path = candidate_path.replace('/data/', '')
++                        relative_path = candidate_path.replace(DATA_ROOT + os.sep, '')
+                         suggestions.append(relative_path)
+         except Exception as e:
+             print(f"Error searching for files: {e}")
+-- 
+2.43.0
+

@@ -1,0 +1,200 @@
+From 46d0562a64e68b981afc8eb4d3fd0bee29209d0f Mon Sep 17 00:00:00 2001
+From: l00653114 <l00653114@example.com>
+Date: Thu, 20 Aug 2026 11:45:00 +0800
+Subject: [PATCH 4/9] feat(desktop): Windows memory probe branch + load_avg
+ tolerance
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- _available_memory_mb(): 非 Linux 用 psutil.virtual_memory().available，失败回退 0
+- system_monitor.load_avg: 非 Linux 给 0.0 默认（Windows 无 os.getloadavg，原 except OSError 接不住 AttributeError）
+- 新增 5 个 Windows 分支测试
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/services/dataset_stats/engine.py     |  13 ++-
+ backend/services/system_monitor.py           |  15 ++-
+ backend/tests/test_system_monitor_windows.py | 108 +++++++++++++++++++
+ 3 files changed, 131 insertions(+), 5 deletions(-)
+ create mode 100644 backend/tests/test_system_monitor_windows.py
+
+diff --git a/backend/services/dataset_stats/engine.py b/backend/services/dataset_stats/engine.py
+index 765180c..46fe2a3 100644
+--- a/backend/services/dataset_stats/engine.py
++++ b/backend/services/dataset_stats/engine.py
+@@ -20,10 +20,12 @@ import hashlib
+ import logging
+ import os
+ import signal
++import sys
+ import threading
+ import time
+ 
+ import orjson
++import psutil
+ from concurrent.futures import ProcessPoolExecutor, as_completed
+ from concurrent.futures.process import BrokenProcessPool
+ from typing import Callable, Dict, List, Optional, Tuple
+@@ -38,7 +40,16 @@ logger = logging.getLogger(__name__)
+ 
+ 
+ def _available_memory_mb() -> int:
+-    """Linux MemAvailable (MB). 0 when unreadable → caller falls back to CPU."""
++    """Available memory (MB). Linux: MemAvailable from /proc/meminfo.
++    Non-Linux (Windows): psutil.virtual_memory().available, so worker sizing
++    and the memory guard stay meaningful on Windows (no /proc/meminfo).
++    0 when unreadable → callers fall back to CPU-based sizing / skip the
++    memory check."""
++    if sys.platform != "linux":
++        try:
++            return psutil.virtual_memory().available // (1024 * 1024)
++        except Exception:
++            return 0
+     try:
+         with open("/proc/meminfo") as f:
+             for line in f:
+diff --git a/backend/services/system_monitor.py b/backend/services/system_monitor.py
+index 4309ff6..be81394 100644
+--- a/backend/services/system_monitor.py
++++ b/backend/services/system_monitor.py
+@@ -75,11 +75,18 @@ def get_cpu_stats() -> Dict:
+     overall = psutil.cpu_percent(interval=None)
+     per_core = psutil.cpu_percent(interval=None, percpu=True)
+ 
+-    # Load averages
+-    try:
+-        load_1m, load_5m, load_15m = os.getloadavg()
+-    except OSError:
++    # Load averages — os.getloadavg() is POSIX-only: on Windows the
++    # attribute does not exist (AttributeError, not the OSError guarded
++    # below), so non-Linux skips the call and emits zero averages instead.
++    # Keys stay present so API/frontend consumers render "0" rather than
++    # missing fields.
++    if platform.system() != "Linux":
+         load_1m = load_5m = load_15m = 0.0
++    else:
++        try:
++            load_1m, load_5m, load_15m = os.getloadavg()
++        except OSError:
++            load_1m = load_5m = load_15m = 0.0
+ 
+     # CPU frequency
+     try:
+diff --git a/backend/tests/test_system_monitor_windows.py b/backend/tests/test_system_monitor_windows.py
+new file mode 100644
+index 0000000..0733b0d
+--- /dev/null
++++ b/backend/tests/test_system_monitor_windows.py
+@@ -0,0 +1,108 @@
++"""Windows-branch tests for memory probing and load-average handling.
++
++Covers the platform branches added for the single-machine Windows port:
++- services/dataset_stats/engine.py:_available_memory_mb() must use
++  psutil on non-Linux (Windows has no /proc/meminfo) and keep the
++  /proc/meminfo path on Linux;
++- services/system_monitor.py:get_cpu_stats() must not call
++  os.getloadavg() off Linux (the API does not exist on Windows — an
++  AttributeError, not the OSError the old guard caught) and must emit
++  zero load averages with the keys still present.
++"""
++
++import sys
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
++
++from services import system_monitor
++from services.dataset_stats import engine as ds_engine
++
++
++class _FakeMem:
++    def __init__(self, available):
++        self.available = available
++
++
++class _FakeMeminfo:
++    """/proc/meminfo stand-in: __enter__ returns self, iteration yields lines."""
++    _lines = [
++        "MemTotal:       32768332 kB\n",
++        "MemAvailable:   15451744 kB\n",
++    ]
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *exc):
++        return False
++
++    def __iter__(self):
++        return iter(self._lines)
++
++
++def _raise_oserror():
++    raise OSError("simulated psutil failure")
++
++
++def test_available_memory_mb_windows_uses_psutil(monkeypatch):
++    """Non-Linux: psutil.virtual_memory().available in MB (bytes -> MB),
++    and /proc/meminfo must not be touched."""
++    monkeypatch.setattr(sys, "platform", "win32")
++    monkeypatch.setattr(ds_engine.psutil, "virtual_memory",
++                        lambda: _FakeMem(available=8 * 1024 * 1024 * 1024))
++    monkeypatch.setattr("builtins.open",
++                        lambda *a, **k: (_ for _ in ()).throw(
++                            AssertionError("open() must not be called on Windows")))
++    assert ds_engine._available_memory_mb() == 8192
++
++
++def test_available_memory_mb_windows_psutil_failure_returns_zero(monkeypatch):
++    """Parity with the Linux '0 when unreadable' contract: a psutil failure
++    on non-Linux degrades to 0 so callers fall back to CPU-based sizing."""
++    monkeypatch.setattr(sys, "platform", "win32")
++    monkeypatch.setattr(ds_engine.psutil, "virtual_memory", _raise_oserror)
++    assert ds_engine._available_memory_mb() == 0
++
++
++def test_available_memory_mb_linux_still_reads_proc_meminfo(monkeypatch):
++    """Linux path unchanged: MemAvailable line (kB) -> MB."""
++    monkeypatch.setattr(sys, "platform", "linux")
++    monkeypatch.setattr("builtins.open", lambda *a, **k: _FakeMeminfo())
++    assert ds_engine._available_memory_mb() == 15451744 // 1024
++
++
++def test_get_cpu_stats_windows_returns_zero_load_avg(monkeypatch):
++    """Off Linux, os.getloadavg must not be called; load_avg keys stay
++    present with 0.0 so API/frontend consumers render "0" rather than
++    missing fields."""
++    monkeypatch.setattr(system_monitor.platform, "system", lambda: "Windows")
++    monkeypatch.setattr(
++        system_monitor.os, "getloadavg",
++        lambda: (_ for _ in ()).throw(
++            AssertionError("os.getloadavg must not be called on non-Linux")))
++    monkeypatch.setattr(system_monitor.psutil, "cpu_percent", lambda *a, **k: 5.0)
++    monkeypatch.setattr(system_monitor.psutil, "cpu_freq", lambda: None)
++    monkeypatch.setattr(system_monitor.psutil, "cpu_count", lambda **k: 4)
++
++    stats = system_monitor.get_cpu_stats()
++    assert stats["load_avg_1m"] == 0.0
++    assert stats["load_avg_5m"] == 0.0
++    assert stats["load_avg_15m"] == 0.0
++    assert stats["percent"] == 5.0
++    assert stats["core_count_logical"] == 4
++
++
++def test_get_cpu_stats_linux_uses_getloadavg(monkeypatch):
++    """Linux path unchanged: load averages flow through from os.getloadavg."""
++    monkeypatch.setattr(system_monitor.platform, "system", lambda: "Linux")
++    monkeypatch.setattr(system_monitor.os, "getloadavg",
++                        lambda: (0.5, 0.25, 0.1))
++    monkeypatch.setattr(system_monitor.psutil, "cpu_percent", lambda *a, **k: 5.0)
++    monkeypatch.setattr(system_monitor.psutil, "cpu_freq", lambda: None)
++    monkeypatch.setattr(system_monitor.psutil, "cpu_count", lambda **k: 4)
++
++    stats = system_monitor.get_cpu_stats()
++    assert stats["load_avg_1m"] == 0.5
++    assert stats["load_avg_5m"] == 0.25
++    assert stats["load_avg_15m"] == 0.1
+-- 
+2.43.0
+

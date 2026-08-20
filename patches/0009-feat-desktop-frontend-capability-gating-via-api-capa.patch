@@ -1,0 +1,590 @@
+From 7a87238025645a575afb3d6d51c32bbcdc283503 Mon Sep 17 00:00:00 2001
+From: l00653114 <l00653114@example.com>
+Date: Thu, 20 Aug 2026 11:45:11 +0800
+Subject: [PATCH 9/9] feat(desktop): frontend capability gating via
+ /api/capabilities
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- CapabilitiesContext: 启动 fetch 一次，失败兜底全 true（上游行为不变）
+- File Explorer 右键/actions/I/O 下拉/顶栏 gate：gateway push、datalab Validation、claude、s3、scp、arena、traj_viz、workbench、volcengine
+- convert/validate-atif 为本地 format-ops 不 gate；validate-panguml/ml15 挂 workbench
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ frontend/src/App.jsx                          |  15 +-
+ .../src/components/DistillationManager.jsx    |   5 +-
+ frontend/src/components/FileExplorer.jsx      | 148 +++++++++++-------
+ .../src/components/FormatValidateModal.jsx    |   4 +-
+ frontend/src/components/JsonlViewer.jsx       |   4 +-
+ frontend/src/contexts/CapabilitiesContext.jsx |  64 ++++++++
+ frontend/src/main.jsx                         |   5 +-
+ 7 files changed, 179 insertions(+), 66 deletions(-)
+ create mode 100644 frontend/src/contexts/CapabilitiesContext.jsx
+
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index 013d51b..b67b4fb 100644
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -15,6 +15,7 @@ import ApiTokenManager from './components/ApiTokenManager';
+ import AuditLogViewer from './components/AuditLogViewer';
+ import SplitPaneLayout from './components/SplitPaneLayout';
+ import AuthContext from './contexts/AuthContext';
++import { useCapabilities } from './contexts/CapabilitiesContext';
+ import BackendHealthMonitor from './components/BackendHealthMonitor';
+ import AccessDeniedModal from './components/AccessDeniedModal';
+ import MODAL_PRESETS from './utils/modalPresets';
+@@ -46,6 +47,7 @@ const { Header, Content } = Layout;
+ function DataManager() {
+   const [searchParams, setSearchParams] = useSearchParams();
+   const navigate = useNavigate();
++  const caps = useCapabilities();
+ 
+   const [selectedFile, setSelectedFile] = useState(null);
+   const [currentPath, setCurrentPath] = useState('');
+@@ -167,7 +169,7 @@ function DataManager() {
+       startTransition(() => { setPilotManagerVisible(true); });
+     } else if (view === 'spot-check') {
+       startTransition(() => { setSpotCheckVisible(true); });
+-    } else if (view === 'arena') {
++    } else if (view === 'arena' && caps.arena) {
+       startTransition(() => { setArenaVisible(true); });
+     } else if (view === 'aggregation') {
+       startTransition(() => { setAggregationVisible(true); });
+@@ -179,7 +181,7 @@ function DataManager() {
+     } else {
+       setExplorerMode('single'); // Default to FileExplorer
+     }
+-  }, [searchParams, isAuthenticated]);
++  }, [searchParams, isAuthenticated, caps.arena]);
+ 
+   // Restore line number from URL on initial load or when file param changes
+   const restoredLineForFileRef = useRef(null);
+@@ -347,6 +349,7 @@ function DataManager() {
+   };
+ 
+   const handleArenaOpen = () => {
++    if (!caps.arena) return; // feature disabled by capability gate
+     startTransition(() => { setArenaVisible(true); });
+     updateUrlParams({ view: 'arena' });
+   };
+@@ -767,6 +770,7 @@ function DataManager() {
+             </h1>
+ 
+             {/* Pipeline - standalone top-level button */}
++            {caps.workbench && (
+             <Button
+               icon={<ApartmentOutlined />}
+               onClick={() => window.open('/pipeline/', '_blank')}
+@@ -775,6 +779,7 @@ function DataManager() {
+             >
+               <span className="button-text-hide-laptop">Pipeline</span>
+             </Button>
++            )}
+ 
+             {/* 数据集结 - standalone top-level button */}
+             <Button
+@@ -796,6 +801,7 @@ function DataManager() {
+               >
+                 <span className="button-text-hide-laptop">Versions</span>
+               </Button>
++              {caps.arena && (
+               <Button
+                 icon={<TrophyOutlined />}
+                 onClick={handleArenaOpen}
+@@ -804,6 +810,7 @@ function DataManager() {
+               >
+                 <span className="button-text-hide-laptop">Arena</span>
+               </Button>
++              )}
+               <Button
+                 icon={<SettingOutlined />}
+                 onClick={handleSchemaOpen}
+@@ -841,7 +848,7 @@ function DataManager() {
+               menu={{
+                 items: [
+                   { key: 'versions', label: 'Versions', icon: <BranchesOutlined style={{ color: '#3b82f6' }} />, onClick: () => startTransition(() => setDataVersionVisible(true)) },
+-                  { key: 'arena', label: 'Arena', icon: <TrophyOutlined style={{ color: '#f59e0b' }} />, onClick: handleArenaOpen },
++                  ...(caps.arena ? [{ key: 'arena', label: 'Arena', icon: <TrophyOutlined style={{ color: '#f59e0b' }} />, onClick: handleArenaOpen }] : []),
+                   { key: 'schema', label: 'Schema', icon: <SettingOutlined style={{ color: '#10b981' }} />, onClick: handleSchemaOpen },
+                   { key: 'search', label: 'Search', icon: <SearchOutlined style={{ color: '#6366f1' }} />, onClick: handleSearchOpen },
+                   { key: 'models', label: 'Models', icon: <DeploymentUnitOutlined style={{ color: '#0ea5e9' }} />, onClick: handleModelManagerOpen },
+@@ -1224,7 +1231,7 @@ function DataManager() {
+       )}
+ 
+       {/* Arena LLM Comparison */}
+-      {arenaVisible && (
++      {arenaVisible && caps.arena && (
+         <Suspense fallback={<Spin size="large" />}>
+           <Arena
+             visible={arenaVisible}
+diff --git a/frontend/src/components/DistillationManager.jsx b/frontend/src/components/DistillationManager.jsx
+index a02a0c8..9231038 100644
+--- a/frontend/src/components/DistillationManager.jsx
++++ b/frontend/src/components/DistillationManager.jsx
+@@ -12,6 +12,7 @@ import {
+ } from '@ant-design/icons';
+ import api from '../services/api';
+ import { formatTimestamp } from '../utils/dateUtils';
++import { useCapabilities } from '../contexts/CapabilitiesContext';
+ 
+ const { Option } = Select;
+ const { TextArea } = Input;
+@@ -19,6 +20,7 @@ const { Title, Text, Paragraph } = Typography;
+ const { Panel } = Collapse;
+ 
+ const DistillationManager = ({ currentPath, onSelectPath }) => {
++  const caps = useCapabilities();
+   const [activeTasks, setActiveTasks] = useState([]);
+   const [taskHistory, setTaskHistory] = useState([]);
+   const [apiConfigs, setApiConfigs] = useState([]);
+@@ -1486,7 +1488,8 @@ const DistillationManager = ({ currentPath, onSelectPath }) => {
+           >
+             <Select>
+               <Option value="openai">OpenAI Compatible</Option>
+-              <Option value="volcengine">Volcengine Ark</Option>
++              {/* Volcengine Ark provider — hidden when the volcengine capability is off */}
++              {caps.volcengine && <Option value="volcengine">Volcengine Ark</Option>}
+             </Select>
+           </Form.Item>
+ 
+diff --git a/frontend/src/components/FileExplorer.jsx b/frontend/src/components/FileExplorer.jsx
+index 5b2e37b..0d7b18e 100644
+--- a/frontend/src/components/FileExplorer.jsx
++++ b/frontend/src/components/FileExplorer.jsx
+@@ -79,6 +79,7 @@ import { formatTimestamp, parseTimestamp, formatRelativeTime } from '../utils/da
+ import { getPref, setPref, viewModeKey, sortKey, recentKey, aggBannerKey } from '../utils/userPrefs';
+ import { useDrag } from '../contexts/DragContext';
+ import { useAuth } from '../contexts/AuthContext';
++import { useCapabilities } from '../contexts/CapabilitiesContext';
+ import { analyzeEval, checkZip, addFavorite } from '../services/evalAnalysisApi';
+ import useAggregationBadges from '../hooks/useAggregationBadges';
+ import useFolderChangeStatus from '../hooks/useFolderChangeStatus';
+@@ -205,6 +206,7 @@ const FileExplorer = ({
+ }) => {
+   const navigate = useNavigate();
+   const { role, username } = useAuth();
++  const caps = useCapabilities();
+   const canWrite = role === 'admin' || role === 'editor';
+ 
+   // Ask Claude (Claude Code) is admin-only
+@@ -3446,6 +3448,17 @@ const FileExplorer = ({
+     const isDir = record?.type === 'directory';
+     if (!isJsonl && !isJson && !isDir) return null;
+ 
++    // Capability gates: the submenu itself always renders — convert + ATIF
++    // validation are pure local format ops (always available, see
++    // backend/config.py "Format Ops — Pure local capabilities"). Only
++    // gateway-dependent and workbench-dependent children are filtered:
++    //   push            → gateway (推送)
++    //   convert         → always (local export)
++    //   validate atif   → always (local validator)
++    //   validate pangu  → workbench (backend runs it on the workbench)
++    const gatewayOn = caps.gateway;
++    const workbenchOn = caps.workbench;
++
+     const pushItem = {
+       key: 'gateway-push',
+       label: 'Push to MindForge',
+@@ -3489,32 +3502,35 @@ const FileExplorer = ({
+       onClick: () => openFormatValidate(record, 'ml15')
+     };
+ 
+-    let children;
++    const children = [];
++    const panguValidateItems = workbenchOn
++      ? [validatePangumlItem, validateMl15Item]
++      : [];
+     if (isJson) {
+       const jsonlOnly = (item) => ({ ...item, label: `${item.label} (requires .jsonl)`, disabled: true });
+-      children = [
+-        jsonlOnly(pushItem),
+-        { type: 'divider' },
++      // push — gateway-gated
++      if (gatewayOn) children.push(jsonlOnly(pushItem));
++      // convert — always available (local format ops)
++      if (children.length) children.push({ type: 'divider' });
++      children.push(
+         jsonlOnly(convertAtifItem),
+         jsonlOnly(convertPangumlItem),
+         jsonlOnly(convertToMl15Item),
+-        { type: 'divider' },
+-        validateAtifItem,
+-        jsonlOnly(validatePangumlItem),
+-        jsonlOnly(validateMl15Item),
+-      ];
++      );
++      // validate — ATIF is local; Pangu ML 2.0/1.5 run on the workbench
++      const validateItems = [validateAtifItem, ...panguValidateItems.map(jsonlOnly)];
++      children.push({ type: 'divider' }, ...validateItems);
+     } else {
+-      children = [
+-        pushItem,
+-        { type: 'divider' },
++      if (gatewayOn) {
++        children.push(pushItem);
++        children.push({ type: 'divider' });
++      }
++      children.push(
+         convertAtifItem,
+         convertPangumlItem,
+         convertToMl15Item,
+-        { type: 'divider' },
+-        validateAtifItem,
+-        validatePangumlItem,
+-        validateMl15Item,
+-      ];
++      );
++      children.push({ type: 'divider' }, validateAtifItem, ...panguValidateItems);
+     }
+     return canWriteMenuItem({
+       key: 'gateway',
+@@ -4215,7 +4231,7 @@ const FileExplorer = ({
+       if (gatewayEntry) items.push(gatewayEntry);
+ 
+       // traj-lens integration
+-      if (trajlensAvailable) {
++      if (trajlensAvailable && caps.traj_viz) {
+         items.push({
+           key: 'trajlens-open',
+           label: 'Open in traj-lens',
+@@ -4233,7 +4249,7 @@ const FileExplorer = ({
+       }
+ 
+       // Launch Pipeline - for JSONL files (Pipeline Workbench integration)
+-      if (workbenchEnabled) {
++      if (workbenchEnabled && caps.workbench) {
+         items.push({
+           key: 'launch-pipeline',
+           label: 'Launch Pipeline',
+@@ -4253,7 +4269,7 @@ const FileExplorer = ({
+     }
+ 
+     // Launch Pipeline - for folders containing JSONL data
+-    if (workbenchEnabled && record.type === 'directory') {
++    if (workbenchEnabled && caps.workbench && record.type === 'directory') {
+       items.push({
+         key: 'launch-pipeline',
+         label: 'Launch Pipeline',
+@@ -4278,7 +4294,7 @@ const FileExplorer = ({
+     }
+ 
+     // Folders - Ask Claude
+-    if (record.type === 'directory' && canAskClaude()) {
++    if (record.type === 'directory' && canAskClaude() && caps.claude) {
+       items.push({
+         key: 'ask-claude',
+         label: 'Ask Claude',
+@@ -4786,12 +4802,13 @@ const FileExplorer = ({
+             icon: <FolderOutlined />,
+             onClick: () => document.getElementById('folder-upload-input').click()
+           }, canWrite),
+-          canWriteMenuItem({
++          // SCP transfer entry — hidden when the scp capability is off.
++          ...(caps.scp ? [canWriteMenuItem({
+             key: 'upload-from-server',
+             label: 'Upload from Server',
+             icon: <CloudServerOutlined />,
+             onClick: openScpModal
+-          }, canWrite),
++          }, canWrite)] : []),
+         ]
+       },
+     ];
+@@ -6527,6 +6544,7 @@ const FileExplorer = ({
+               </ProtectedButton>
+ 
+               {/* S3 Manager - direct button */}
++              {caps.s3 && (
+               <ProtectedButton
+                 canWrite={canWrite}
+                 icon={<CloudSyncOutlined />}
+@@ -6536,8 +6554,10 @@ const FileExplorer = ({
+               >
+                 <span className="button-text-hide-medium">S3</span>
+               </ProtectedButton>
++              )}
+ 
+-              {/* Validation Manager - direct button */}
++              {/* Validation Manager - direct button (datalab one-click quality check) */}
++              {caps.datalab && (
+               <ProtectedButton
+                 canWrite={canWrite}
+                 icon={<ExperimentOutlined />}
+@@ -6547,6 +6567,7 @@ const FileExplorer = ({
+               >
+                 <span className="button-text-hide-medium">Validation</span>
+               </ProtectedButton>
++              )}
+ 
+               {/* I/O Group - Upload, Download, Transfer */}
+               <Dropdown
+@@ -6570,26 +6591,31 @@ const FileExplorer = ({
+                       icon: <LinkOutlined />,
+                       onClick: () => setUrlDownloadModalVisible(true)
+                     }, canWrite),
+-                    { type: 'divider' },
+-                    canWriteMenuItem({
+-                      key: 'from-server',
+-                      label: 'From Server',
+-                      icon: <CloudServerOutlined />,
+-                      onClick: openScpModal
+-                    }, canWrite),
+-                    { type: 'divider' },
+-                    canWriteMenuItem({
+-                      key: 'push-to-gateway',
+-                      label: 'Push to MindForge',
+-                      icon: <CloudUploadOutlined />,
+-                      onClick: () => openGatewayTransfer(null, 'push')
+-                    }, canWrite),
+-                    canWriteMenuItem({
+-                      key: 'pull-from-gateway',
+-                      label: 'Pull from MindForge',
+-                      icon: <CloudDownloadOutlined />,
+-                      onClick: () => openGatewayTransfer(null, 'pull')
+-                    }, canWrite),
++                    // SCP + Gateway entries — hidden when their capability is off.
++                    ...(caps.scp ? [
++                      { type: 'divider' },
++                      canWriteMenuItem({
++                        key: 'from-server',
++                        label: 'From Server',
++                        icon: <CloudServerOutlined />,
++                        onClick: openScpModal
++                      }, canWrite),
++                    ] : []),
++                    ...(caps.gateway ? [
++                      { type: 'divider' },
++                      canWriteMenuItem({
++                        key: 'push-to-gateway',
++                        label: 'Push to MindForge',
++                        icon: <CloudUploadOutlined />,
++                        onClick: () => openGatewayTransfer(null, 'push')
++                      }, canWrite),
++                      canWriteMenuItem({
++                        key: 'pull-from-gateway',
++                        label: 'Pull from MindForge',
++                        icon: <CloudDownloadOutlined />,
++                        onClick: () => openGatewayTransfer(null, 'pull')
++                      }, canWrite),
++                    ] : []),
+                     { type: 'divider' },
+                     canWriteMenuItem({
+                       key: 'download-zip',
+@@ -6676,6 +6702,10 @@ const FileExplorer = ({
+                       onClick: () => onOpenAggregation && onOpenAggregation()
+                     },
+                     { type: 'divider' },
++                    // Convert & Validate — always rendered: convert + ATIF
++                    // validation are pure local format ops. Only the Pangu
++                    // ML 2.0/1.5 validation entries are workbench-gated
++                    // (backend runs them on the workbench).
+                     canWriteMenuItem({
+                       key: 'convert-validate',
+                       label: 'Convert & Validate',
+@@ -6706,18 +6736,20 @@ const FileExplorer = ({
+                           icon: <CheckSquareOutlined />,
+                           onClick: () => openFormatValidate(null, 'atif')
+                         },
+-                        {
+-                          key: 'tool-validate-panguml',
+-                          label: 'Validate Pangu ML 2.0',
+-                          icon: <CheckSquareOutlined />,
+-                          onClick: () => openFormatValidate(null, 'panguml')
+-                        },
+-                        {
+-                          key: 'tool-validate-ml15',
+-                          label: 'Validate Pangu ML 1.5',
+-                          icon: <CheckSquareOutlined />,
+-                          onClick: () => openFormatValidate(null, 'ml15')
+-                        },
++                        ...(caps.workbench ? [
++                          {
++                            key: 'tool-validate-panguml',
++                            label: 'Validate Pangu ML 2.0',
++                            icon: <CheckSquareOutlined />,
++                            onClick: () => openFormatValidate(null, 'panguml')
++                          },
++                          {
++                            key: 'tool-validate-ml15',
++                            label: 'Validate Pangu ML 1.5',
++                            icon: <CheckSquareOutlined />,
++                            onClick: () => openFormatValidate(null, 'ml15')
++                          },
++                        ] : []),
+                       ]
+                     }, canWrite),
+                   ]
+@@ -6797,7 +6829,7 @@ const FileExplorer = ({
+                       onClick: () => openAnnotationSyncModal({ path: currentPath }, 'import')
+                     },
+                     { type: 'divider' },
+-                    ...(role === 'admin' ? [{
++                    ...(role === 'admin' && caps.claude ? [{
+                       key: 'ask-claude',
+                       label: 'Ask Claude',
+                       icon: <ClaudeCodeIcon style={{ width: '14px', height: '14px' }} />,
+@@ -6806,7 +6838,7 @@ const FileExplorer = ({
+                         setClaudeChatVisible(true);
+                       }
+                     }] : []),
+-                    ...(trajlensAvailable ? [{
++                    ...(trajlensAvailable && caps.traj_viz ? [{
+                       key: 'traj-lens',
+                       label: 'traj-lens',
+                       icon: <LineChartOutlined style={{ color: '#13c2c2' }} />,
+diff --git a/frontend/src/components/FormatValidateModal.jsx b/frontend/src/components/FormatValidateModal.jsx
+index c34eafe..b7674cd 100644
+--- a/frontend/src/components/FormatValidateModal.jsx
++++ b/frontend/src/components/FormatValidateModal.jsx
+@@ -22,6 +22,7 @@ import {
+ import FolderBrowser from './FolderBrowser';
+ import FormatOpsTaskList from './FormatOpsTaskList';
+ import { isWorkbenchEnabled } from '../utils/workbench';
++import { useCapabilities } from '../contexts/CapabilitiesContext';
+ 
+ const { Text } = Typography;
+ 
+@@ -80,6 +81,7 @@ const stripDataPrefix = (path) => String(path || '')
+  * and sample rows. Unavailable (503) when the workbench is offline.
+  */
+ const FormatValidateModal = ({ visible, onClose, initialTarget, mode }) => {
++  const caps = useCapabilities();
+   const [target, setTarget] = useState(initialTarget || null); // {path, name, type}
+   const [browserOpen, setBrowserOpen] = useState(false);
+   const [preflight, setPreflight] = useState(null); // {files, summary}
+@@ -658,7 +660,7 @@ const FormatValidateModal = ({ visible, onClose, initialTarget, mode }) => {
+             {isWorkbenchMode && (
+               <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+                 Run <Text code>{report.run_id}</Text> — full details live in the Pipeline Workbench
+-                {isWorkbenchEnabled() && (
++                {isWorkbenchEnabled() && caps.workbench && (
+                   <Button
+                     type="link"
+                     size="small"
+diff --git a/frontend/src/components/JsonlViewer.jsx b/frontend/src/components/JsonlViewer.jsx
+index c4caff0..3c1e701 100644
+--- a/frontend/src/components/JsonlViewer.jsx
++++ b/frontend/src/components/JsonlViewer.jsx
+@@ -15,6 +15,7 @@ import { prepareVisualizeTrajectory, createTrainingLabel, getTrainingLabelStatus
+ import LabelDetailDrawer from './LabelDetailDrawer';
+ import RecordReviewActions from './RecordReviewActions';
+ import { useAuth } from '../contexts/AuthContext';
++import { useCapabilities } from '../contexts/CapabilitiesContext';
+ import ModernPagination from './ModernPagination';
+ 
+ const isTrajectoryData = (content) => {
+@@ -275,6 +276,7 @@ const getLinePreview = (line, isAtif = false) => {
+ 
+ const JsonlViewer = ({ file, onClose, initialLineNo, onLineConsumed }) => {
+   const { role, user_id } = useAuth();
++  const caps = useCapabilities();
+   const isAdmin = role === 'admin';
+   const canWrite = role === 'admin' || role === 'editor';
+   const [data, setData] = useState(null);
+@@ -2101,7 +2103,7 @@ const JsonlViewer = ({ file, onClose, initialLineNo, onLineConsumed }) => {
+                             }}
+                           />
+                         </Tooltip>
+-                        {selectedIsTrajectory && (
++                        {selectedIsTrajectory && caps.traj_viz && (
+                           <Dropdown
+                             menu={{
+                               items: [
+diff --git a/frontend/src/contexts/CapabilitiesContext.jsx b/frontend/src/contexts/CapabilitiesContext.jsx
+new file mode 100644
+index 0000000..bc156a4
+--- /dev/null
++++ b/frontend/src/contexts/CapabilitiesContext.jsx
+@@ -0,0 +1,64 @@
++import { createContext, useContext, useEffect, useState } from 'react';
++
++// Feature-availability flags for the desktop productization build
++// (DataViewer-Desktop): the backend reports which optional features are
++// enabled via GET /api/capabilities. Each key gates the UI entry points of
++// one feature — false means the entry is not rendered.
++//
++// The DEFAULT is all-true: when the endpoint is missing, unreachable or
++// returns an error, the app must behave exactly as upstream DataViewer does
++// today (no feature hidden). The fetch can therefore only ever NARROW flags,
++// never widen them past the default.
++const DEFAULT_CAPABILITIES = {
++  gateway: true,      // MindForge push / pull / format export
++  datalab: true,      // datalab-platform one-click quality check (validation)
++  hf: true,           // HuggingFace download
++  arena: true,        // LLM arena comparison (import)
++  claude: true,       // Ask Claude / Claude Chat / Claude Terminal
++  s3: true,           // S3 transfer
++  volcengine: true,   // Volcengine Ark provider
++  ray_quality: true,  // Ray distributed quality check
++  traj_viz: true,     // trajectory visualization (traj-viz, traj-lens)
++  workbench: true,    // SFT Pipeline Workbench
++  scp: true,          // SCP server transfer
++};
++
++const CapabilitiesContext = createContext(DEFAULT_CAPABILITIES);
++
++export const useCapabilities = () => useContext(CapabilitiesContext);
++
++// App-level provider: fetches /api/capabilities once at startup, independent
++// of the auth flow, so the login page and unauthenticated renders are gated
++// identically. Plain fetch (NOT the axios `api` instance): the axios
++// interceptor treats 401 as "session expired" and reloads the page — wrong
++// for a startup probe. Any failure falls back to DEFAULT_CAPABILITIES.
++export function CapabilitiesProvider({ children }) {
++  const [capabilities, setCapabilities] = useState(DEFAULT_CAPABILITIES);
++
++  useEffect(() => {
++    let cancelled = false;
++    fetch('/api/capabilities')
++      .then((res) => {
++        if (!res.ok) throw new Error(`capabilities fetch: HTTP ${res.status}`);
++        return res.json();
++      })
++      .then((data) => {
++        if (cancelled) return;
++        if (data && typeof data === 'object') {
++          setCapabilities((prev) => ({ ...prev, ...data }));
++        }
++      })
++      .catch(() => {
++        // Silent fallback: keep the all-true default (upstream behavior).
++      });
++    return () => { cancelled = true; };
++  }, []);
++
++  return (
++    <CapabilitiesContext.Provider value={capabilities}>
++      {children}
++    </CapabilitiesContext.Provider>
++  );
++}
++
++export default CapabilitiesContext;
+diff --git a/frontend/src/main.jsx b/frontend/src/main.jsx
+index 9d3989c..527e837 100644
+--- a/frontend/src/main.jsx
++++ b/frontend/src/main.jsx
+@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
+ import App from './App'
+ import './index.css'
+ import { initServerTimezone } from './utils/dateUtils'
++import { CapabilitiesProvider } from './contexts/CapabilitiesContext'
+ 
+ // Signal to the boot-fallback script that the React app has loaded
+ if (window.__markBootOk) window.__markBootOk();
+@@ -87,7 +88,9 @@ class RootErrorBoundary extends React.Component {
+ ReactDOM.createRoot(document.getElementById('root')).render(
+   <React.StrictMode>
+     <RootErrorBoundary>
+-      <App />
++      <CapabilitiesProvider>
++        <App />
++      </CapabilitiesProvider>
+     </RootErrorBoundary>
+   </React.StrictMode>,
+ )
+-- 
+2.43.0
+

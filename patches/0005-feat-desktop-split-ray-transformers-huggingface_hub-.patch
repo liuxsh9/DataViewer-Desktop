@@ -1,0 +1,229 @@
+From 88e1ee0d29396cd0aa3ece7505bb0a1b055d2781 Mon Sep 17 00:00:00 2001
+From: l00653114 <l00653114@example.com>
+Date: Thu, 20 Aug 2026 11:45:00 +0800
+Subject: [PATCH 5/9] feat(desktop): split ray/transformers/huggingface_hub
+ into optional deps
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- ray[default] → extra quality_ray；transformers 移除（零引用）；huggingface_hub → extra hf
+- quality_ray_workers: 顶层 import ray 改 QUALITY_RAY_ENABLED 门控容忍导入 + 条件装饰器
+- hf_download_manager: huggingface_hub 容忍导入 + _require_hf() 守卫
+- uv.lock 未更新（本机无 uv），CI 需 uv sync 非 frozen 或补跑 uv lock
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/pyproject.toml                  |  7 +--
+ backend/services/hf_download_manager.py | 38 +++++++++++++++-
+ backend/services/quality_ray_workers.py | 58 +++++++++++++++++++++++--
+ 3 files changed, 94 insertions(+), 9 deletions(-)
+
+diff --git a/backend/pyproject.toml b/backend/pyproject.toml
+index f04bd66..1701a9e 100644
+--- a/backend/pyproject.toml
++++ b/backend/pyproject.toml
+@@ -9,7 +9,6 @@ dependencies = [
+     "aiofiles>=23.2.1",
+     "python-multipart>=0.0.20",
+     "pyjwt>=2.8.0",
+-    "ray[default]>=2.46.0",
+     "orjson>=3.11.7",
+     "opencc>=1.3.1",
+     "bcrypt>=4.1.2",
+@@ -32,13 +31,15 @@ dependencies = [
+     "pyyaml>=6.0.3",
+     "requests>=2.32.5",
+     "openai>=2.41.0",
+-    "huggingface_hub>=1.8.0",
+-    "transformers>=5.4.0",
+     "jinja2>=3.1",
+ ]
+ 
+ [project.optional-dependencies]
+ volcengine = ["volcengine-python-sdk[ark]"]
++# Distributed quality check workers (services/quality_ray_workers.py)
++quality_ray = ["ray[default]>=2.46.0"]
++# HuggingFace dataset/model downloads (services/hf_download_manager.py)
++hf = ["huggingface_hub>=1.8.0"]
+ # traj-viz: install separately via `uv pip install -e $TRAJ_VIZ_DIR`
+ 
+ [build-system]
+diff --git a/backend/services/hf_download_manager.py b/backend/services/hf_download_manager.py
+index 1752947..1facdfa 100644
+--- a/backend/services/hf_download_manager.py
++++ b/backend/services/hf_download_manager.py
+@@ -6,12 +6,32 @@ import os
+ import time
+ import json
+ import threading
++import logging
+ from pathlib import Path
+ from typing import Dict, List, Optional, Callable
+ from collections import deque
+ from dataclasses import dataclass, asdict
+-from huggingface_hub import snapshot_download, hf_hub_download
+-from huggingface_hub.utils import HfHubHTTPError
++
++import config
++
++logger = logging.getLogger(__name__)
++
++# huggingface_hub is an optional dependency (extra: hf). Keep this module
++# importable without it: downloads raise a clear error instead.
++try:
++    from huggingface_hub import snapshot_download, hf_hub_download
++    from huggingface_hub.utils import HfHubHTTPError
++    HF_AVAILABLE = True
++except ImportError:
++    HF_AVAILABLE = False
++    snapshot_download = None
++    hf_hub_download = None
++    # Keep `except HfHubHTTPError` valid when the package is missing
++    HfHubHTTPError = Exception
++    logger.warning(
++        "huggingface_hub not installed; HF download manager disabled "
++        "(install with `pip install -e '.[hf]'`)"
++    )
+ 
+ # Enable HF_TRANSFER for faster downloads (5-10x speedup)
+ os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+@@ -283,12 +303,26 @@ def process_download_queue():
+                     break
+ 
+ 
++def _require_hf():
++    """Raise a clear error when HF download is disabled or huggingface_hub missing."""
++    if not config.HF_ENABLED:
++        raise RuntimeError(
++            "HF download is disabled (HF_ENABLED=false); set HF_ENABLED=true to enable"
++        )
++    if not HF_AVAILABLE:
++        raise RuntimeError(
++            "huggingface_hub is not installed; HF download requires the hf "
++            "extra: `pip install -e '.[hf]'`"
++        )
++
++
+ def _execute_download(task_id: str):
+     """
+     Execute the download in a background thread with retry logic
+     This is the main download logic
+     """
+     try:
++        _require_hf()
+         # Update status to running
+         update_download_task(task_id, {
+             "status": "running",
+diff --git a/backend/services/quality_ray_workers.py b/backend/services/quality_ray_workers.py
+index 2251d42..1e7b2a0 100644
+--- a/backend/services/quality_ray_workers.py
++++ b/backend/services/quality_ray_workers.py
+@@ -6,7 +6,6 @@ Properly distributed quality check using Ray Tasks:
+ - Each chunk processed in parallel as Ray remote tasks
+ - Ray scheduler distributes tasks across cluster resources
+ """
+-import ray
+ import os
+ import json
+ import logging
+@@ -14,11 +13,60 @@ from pathlib import Path
+ from typing import Dict, List, Any, Iterator
+ import orjson
+ 
++import config
++
+ logger = logging.getLogger(__name__)
+ 
++# ray is an optional dependency (extra: quality_ray). Keep this module
++# importable without it: entry points raise a clear error instead. When the
++# QUALITY_RAY_ENABLED switch is off, ray is never imported at all.
++if config.QUALITY_RAY_ENABLED:
++    try:
++        import ray
++        RAY_AVAILABLE = True
++    except ImportError:
++        RAY_AVAILABLE = False
++        logger.warning(
++            "ray not installed; distributed quality check unavailable "
++            "(install with `pip install -e '.[quality_ray]'`)"
++        )
++else:
++    RAY_AVAILABLE = False
++    logger.info("Ray distributed quality check disabled (QUALITY_RAY_ENABLED=false)")
++
++
++def _require_ray():
++    """Return the ray module, or raise a clear error when unavailable/disabled."""
++    if not config.QUALITY_RAY_ENABLED:
++        raise RuntimeError(
++            "Ray distributed quality check is disabled (QUALITY_RAY_ENABLED=false)"
++        )
++    if not RAY_AVAILABLE:
++        raise RuntimeError(
++            "ray is not installed; distributed quality check requires the "
++            "quality_ray extra: `pip install -e '.[quality_ray]'`"
++        )
++    return ray
++
++
++def _ray_remote(**kwargs):
++    """Apply @ray.remote when available, otherwise act as an identity decorator.
++
++    Keeps module import safe without ray; entry points call _require_ray()
++    and raise before any .remote() attribute is reached.
++    """
++    if RAY_AVAILABLE:
++        return ray.remote(**kwargs)
++
++    def _identity(obj):
++        return obj
++
++    return _identity
++
+ 
+ def init_ray():
+     """Initialize Ray connection"""
++    ray = _require_ray()
+     ray.init(
+         address="ray://10.170.22.55:10001",
+         runtime_env={
+@@ -32,7 +80,7 @@ def init_ray():
+     )
+ 
+ 
+-@ray.remote(num_cpus=2, memory=200000000)
++@_ray_remote(num_cpus=2, memory=200000000)
+ class QualityCheckWorker:
+     """Ray Actor that processes a chunk of samples"""
+ 
+@@ -135,7 +183,7 @@ class QualityCheckWorker:
+         return results
+ 
+ 
+-@ray.remote(num_cpus=1, memory=50000000)
++@_ray_remote(num_cpus=1, memory=50000000)
+ def process_file_chunk(file_path: str, start_line: int, num_lines: int) -> List[Dict]:
+     """Process a chunk of lines from a file
+ 
+@@ -169,7 +217,7 @@ def process_file_chunk(file_path: str, start_line: int, num_lines: int) -> List[
+     return samples
+ 
+ 
+-@ray.remote(num_cpus=1, memory=50000000)
++@_ray_remote(num_cpus=1, memory=50000000)
+ def scan_file_for_lines(file_path: str, chunk_size: int = 1000) -> List[tuple]:
+     """Scan a file and return chunk information
+ 
+@@ -216,6 +264,8 @@ def run_distributed_quality_check(
+     Returns:
+         Dict with aggregated results
+     """
++    ray = _require_ray()
++
+     # Create worker pool
+     workers = [QualityCheckWorker.remote() for _ in range(num_workers)]
+     worker_index = 0
+-- 
+2.43.0
+

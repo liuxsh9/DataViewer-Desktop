@@ -1,0 +1,374 @@
+From c806b4dcda8e1c60ec465fcf8f1b4aef7e779558 Mon Sep 17 00:00:00 2001
+From: l00653114 <l00653114@example.com>
+Date: Thu, 20 Aug 2026 11:45:11 +0800
+Subject: [PATCH 8/9] test(desktop): Windows file-semantics regression suite
+ (dual-platform)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Unicode/中文/emoji 文件名、长路径、大小写、文件锁、分隔符混用、zip 中文名
+- 16 用例：Linux 14 passed / 2 skipped（win32-only）
+- 钉住 zip 无 UTF-8 flag 编码现状（生产修复时同步更新用例）
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/tests/test_windows_file_semantics.py | 346 +++++++++++++++++++
+ 1 file changed, 346 insertions(+)
+ create mode 100644 backend/tests/test_windows_file_semantics.py
+
+diff --git a/backend/tests/test_windows_file_semantics.py b/backend/tests/test_windows_file_semantics.py
+new file mode 100644
+index 0000000..5577c57
+--- /dev/null
++++ b/backend/tests/test_windows_file_semantics.py
+@@ -0,0 +1,346 @@
++"""
++Windows file-semantics regression tests (M1-4.8).
++
++The DataViewer desktop build targets Windows; this module pins the file-system
++semantics the backend relies on so that the SAME suite runs on Linux (dev box /
++CI) and, later, on windows-latest CI:
++
++* Unicode / CJK / emoji / NFD-NFC filenames
++* long paths: NAME_MAX=255 bytes on POSIX vs MAX_PATH=260 on Windows
++* case sensitivity: POSIX case-sensitive, NTFS case-insensitive
++* open-file deletion: allowed on POSIX, denied on Windows (WinError 32)
++* backslash: literal character on POSIX, path separator on Windows
++* zip member-name encoding (UTF-8 flag vs cp437 fallback for GBK archives)
++
++Windows-only assertions live behind ``sys.platform`` branches or
++``pytest.mark.skipif`` so Linux runs stay green; the win32-only tests are
++written to execute as-is on Windows CI. Everything that must hold on BOTH
++platforms is asserted unconditionally.
++"""
++import asyncio
++import io
++import os
++import struct
++import sys
++import zipfile
++import zlib
++from pathlib import Path
++from unittest.mock import MagicMock
++
++sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
++
++import pytest
++from fastapi import HTTPException
++
++from api import files
++import config
++
++
++def run_async(coro):
++    return asyncio.run(coro)
++
++
++def make_request():
++    req = MagicMock()
++    req.state.user = {"user_id": "u1", "username": "alice", "role": "admin"}
++    return req
++
++
++@pytest.fixture
++def data_root(tmp_path, monkeypatch):
++    """DATA_ROOT isolated per test — same pattern as test_view_json.py."""
++    root = tmp_path / "data"
++    root.mkdir()
++    monkeypatch.setattr(files, "get_data_root", lambda: str(root))
++    return root
++
++
++@pytest.fixture
++def cfg_root(tmp_path, monkeypatch):
++    """config.DATA_ROOT isolated per test, for the DB-index path helpers."""
++    root = tmp_path / "cfgdata"
++    root.mkdir()
++    monkeypatch.setattr(config, "DATA_ROOT", str(root))
++    return root
++
++
++# ---------------------------------------------------------------------------
++# Group 1 — Unicode / CJK / emoji filenames
++# ---------------------------------------------------------------------------
++
++def test_unicode_filenames_created_and_listed(data_root):
++    (data_root / "中文名.jsonl").write_text("{}", encoding="utf-8")
++    (data_root / "emoji_\U0001F600.jsonl").write_text("{}", encoding="utf-8")
++
++    # safe_path resolves them inside DATA_ROOT (Linux: NFC bytes as stored)
++    for name in ("中文名.jsonl", "emoji_\U0001F600.jsonl"):
++        p = files.safe_path(name)
++        assert p.is_absolute()
++        assert p.exists()
++
++    # and list_files surfaces them by exact name
++    res = run_async(files.list_files(""))
++    names = {item["name"] for item in res["items"]}
++    assert "中文名.jsonl" in names
++    assert "emoji_\U0001F600.jsonl" in names
++    assert res["total"] == 2
++
++
++def test_unicode_filename_readable_via_view_json(data_root):
++    (data_root / "中文名.json").write_text('{"k": 1}', encoding="utf-8")
++    res = run_async(files.view_json(make_request(), "中文名.json"))
++    assert res["type"] == "object"
++    assert res["content"] == {"k": 1}
++
++
++def test_nfd_nfc_names_both_listed(data_root):
++    # "café" in decomposed (NFD) and composed (NFC) forms. POSIX treats them
++    # as two distinct files; NTFS does no Unicode normalization either, so
++    # both should appear on Windows too. (macOS APFS would unify them — that
++    # platform is out of scope for the desktop build.)
++    # NFD/NFC built from chr() at runtime so source-file normalization
++    # (editor / checkout) can never fold the two literals into one.
++    nfd = "cafe" + chr(0x0301) + ".jsonl"
++    nfc = "caf" + chr(0x00E9) + ".jsonl"
++    (data_root / nfd).write_text("1", encoding="utf-8")
++    (data_root / nfc).write_text("2", encoding="utf-8")
++
++    assert files.safe_path(nfd).exists()
++    assert files.safe_path(nfc).exists()
++
++    res = run_async(files.list_files(""))
++    names = {item["name"] for item in res["items"]}
++    assert nfd in names
++    assert nfc in names
++
++
++# ---------------------------------------------------------------------------
++# Group 2 — long paths
++# ---------------------------------------------------------------------------
++
++LONG_NAME_200 = "n" * 194 + ".jsonl"          # 200 chars, 200 bytes
++LONG_NAME_250 = "n" * 250                      # 250 chars, 250 bytes < 255
++
++
++def test_long_filename_200_chars_roundtrip(data_root):
++    (data_root / LONG_NAME_200).write_text("{}", encoding="utf-8")
++    assert files.safe_path(LONG_NAME_200).exists()
++    res = run_async(files.list_files(""))
++    names = {item["name"] for item in res["items"]}
++    assert LONG_NAME_200 in names
++
++
++def test_long_filename_250_chars_ascii(data_root):
++    # Linux NAME_MAX = 255 BYTES — 250 ASCII chars stay under it. A CJK name
++    # would blow past it (3 bytes/char), which is why the desktop adapter must
++    # never truncate: it would alias distinct files. Not exercised here beyond
++    # the ASCII limit; the bound itself is what this guards.
++    (data_root / LONG_NAME_250).write_text("{}", encoding="utf-8")
++    assert files.safe_path(LONG_NAME_250).exists()
++    res = run_async(files.list_files(""))
++    names = {item["name"] for item in res["items"]}
++    assert LONG_NAME_250 in names
++
++
++@pytest.mark.skipif(sys.platform != "win32",
++                    reason="Windows-only: MAX_PATH (~260) vs \\\\?\\ prefix strategy")
++def test_win32_long_path_with_verbatim_prefix(tmp_path):
++    """Windows MAX_PATH=260 caps most Win32 APIs; the ``\\\\?\\`` prefix opts
++    into verbatim long-path semantics. Python >= 3.6 builds embed the
++    longPathAware manifest, so os.* usually succeeds anyway — the prefix is
++    the strategy the adapter layer should emit for interop with non-Python
++    tools and for paths beyond the manifest limit."""
++    import ntpath
++    long_dir = tmp_path / ("d" * 240)          # full path > 260 chars
++    prefixed = "\\\\?\\" + ntpath.normpath(str(long_dir))
++    os.makedirs(prefixed, exist_ok=True)
++    assert os.path.exists(prefixed)            # verbatim form is addressable
++    assert Path(long_dir).is_dir()             # plain form resolves to same
++
++
++# ---------------------------------------------------------------------------
++# Group 3 — case sensitivity
++# ---------------------------------------------------------------------------
++
++def test_path_case_equality_platform_semantics():
++    # pathlib equality mirrors the platform's case rules: NTFS is
++    # case-insensitive, POSIX is case-sensitive. (WindowsPath lowercases via
++    # os.path.normcase before comparing.)
++    if sys.platform == "win32":
++        assert Path("FOO") == Path("foo")
++        assert os.path.normcase("FOO") == "foo"
++    else:
++        assert Path("FOO") != Path("foo")
++        assert os.path.normcase("FOO") == "FOO"
++
++
++def test_resolve_abs_path_case_platform_semantics(cfg_root):
++    # The DB stores root-relative paths; resolve_abs_path is the index layer.
++    # On Windows a stored path with the wrong case still opens the same file;
++    # on Linux it must match exactly.
++    (cfg_root / "S3_Data").mkdir()
++    (cfg_root / "S3_Data" / "x.jsonl").write_text("{}", encoding="utf-8")
++
++    upper = Path(config.resolve_abs_path("S3_Data/x.jsonl"))
++    lower = Path(config.resolve_abs_path("s3_data/x.jsonl"))
++    assert upper.exists()
++
++    if sys.platform == "win32":
++        assert lower.exists()          # case-insensitive FS: same file
++        assert upper == lower          # pathlib equality normalizes case
++    else:
++        assert not lower.exists()      # case-sensitive FS: distinct path
++        assert upper != lower
++
++
++# ---------------------------------------------------------------------------
++# Group 4 — open-file lock semantics
++# ---------------------------------------------------------------------------
++
++def test_open_file_delete_platform_semantics(tmp_path):
++    """Windows denies deleting a file that is open (WinError 32); POSIX
++    unlink() succeeds and the file is reclaimed on close. The desktop adapter
++    must therefore release handles before removing files on Windows — on
++    Linux the code may "get away" with deleting under an open handle, which
++    is exactly the divergence this test documents."""
++    p = tmp_path / "locked.txt"
++    with open(p, "w", encoding="utf-8") as f:
++        f.write("x")
++        if sys.platform == "win32":
++            with pytest.raises(PermissionError):
++                os.remove(p)
++        else:
++            os.remove(p)
++            assert not p.exists()
++    # Windows branch: file is still there after the handle closes.
++    if sys.platform == "win32":
++        assert p.exists()
++
++
++# ---------------------------------------------------------------------------
++# Group 5 — path separator mixing
++# ---------------------------------------------------------------------------
++
++def test_resolve_abs_path_leading_separator_insensitive(cfg_root):
++    # resolve_abs_path strips any leading / or \\ so the stored relative form
++    # and its "/"-prefixed variant agree on both platforms.
++    assert config.resolve_abs_path("/a/b.jsonl") == config.resolve_abs_path("a/b.jsonl")
++
++
++def test_backslash_platform_specific_in_resolve_abs_path(cfg_root):
++    if sys.platform == "win32":
++        # `\` is the path separator: a\b.jsonl nests under a/
++        p = Path(config.resolve_abs_path("a\\b.jsonl"))
++        assert p.parent.name == "a"
++        assert p.name == "b.jsonl"
++    else:
++        # POSIX: `\` is an ordinary filename character
++        p = Path(config.resolve_abs_path("a\\b.jsonl"))
++        assert p.parent == Path(cfg_root)
++        assert p.name == "a\\b.jsonl"
++
++
++def test_strip_data_root_backslash_semantics(cfg_root):
++    root = str(cfg_root)
++    if sys.platform == "win32":
++        # normpath treats `\` as separator and folds `/` into `\`
++        assert config.strip_data_root(root + "\\a\\b") == os.path.join("a", "b")
++        assert config.strip_data_root(root + "/a/b") == os.path.join("a", "b")
++    else:
++        # POSIX: backslash is literal, `/` is the only separator
++        assert config.strip_data_root(root + "/a\\b") == "a\\b"
++        assert config.strip_data_root(root + "/a/b") == "a/b"
++
++
++def test_strip_data_root_resolve_roundtrip(cfg_root):
++    # rel stored in DB -> absolute -> back to rel: must round-trip with the
++    # platform's own separator convention.
++    rel = config.strip_data_root(config.resolve_abs_path("a/b.jsonl"))
++    assert rel == os.path.join("a", "b.jsonl")
++
++
++@pytest.mark.skipif(sys.platform != "win32",
++                    reason="Windows-only: stored 'a/b' is exposed as 'a\\b'")
++def test_win32_stored_rel_path_uses_backslash_separators(cfg_root):
++    # The DB stores '/'-separated forms; on Windows the filesystem layer
++    # exposes them with `\`. Adapters converting rel->abs must not string-
++    # join with '/', or the path will silently dangle.
++    abs_path = config.resolve_abs_path("a/b.jsonl")
++    assert "\\" in abs_path
++    assert abs_path == os.path.join(str(cfg_root), "a", "b.jsonl")
++
++
++# ---------------------------------------------------------------------------
++# Group 6 — zip member names with Chinese characters
++# ---------------------------------------------------------------------------
++
++def test_zip_chinese_filename_roundtrip(data_root):
++    # Round-trip through the server's own zip conventions: arcname =
++    # str(rel path) exactly like download_folder (api/files.py:3920), then
++    # read back through extract_archive (api/files.py:3017). Python's zipfile
++    # sets the UTF-8 flag for non-ASCII names, so a Python-made archive
++    # round-trips on both platforms.
++    src = data_root / "zip_src"
++    src.mkdir()
++    (src / "中文.txt").write_text("hello", encoding="utf-8")
++
++    buf = io.BytesIO()
++    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
++        for fpath in src.iterdir():
++            zf.write(fpath, str(fpath.relative_to(src)))
++    archive = data_root / "中文压缩.zip"      # CJK archive name itself
++    archive.write_bytes(buf.getvalue())
++
++    res = run_async(files.extract_archive(files.ExtractRequest(path=archive.name)))
++    assert res["success"] is True
++    assert res["extracted_to"] == "中文压缩"   # folder name = archive stem
++    extracted = data_root / "中文压缩"
++    assert (extracted / "中文.txt").read_text(encoding="utf-8") == "hello"
++
++
++def _build_flagless_gbk_zip(name_bytes: bytes, content: bytes) -> bytes:
++    """Minimal single-member STORED zip whose member name is raw bytes with
++    the UTF-8 flag (bit 11) UNSET — the shape produced by Windows Explorer
++    "Send to compressed folder" / 7-Zip on zh-CN systems, which store names
++    in the local codepage (GBK). CPython's zipfile cannot emit this shape
++    (it always sets the UTF-8 flag for non-ASCII names), hence the hand-rolled
++    container: local header + data + central directory + EOCD."""
++    crc = zlib.crc32(content) & 0xFFFFFFFF
++    name_len = len(name_bytes)
++    date = (0 << 9) | (1 << 5) | 1            # 1980-01-01 (DOS date)
++    local = struct.pack(
++        "<IHHHHHIIIHH",
++        0x04034B50, 20, 0, 0, 0, date,
++        crc, len(content), len(content), name_len, 0,
++    ) + name_bytes + content
++    central = struct.pack(
++        "<IHHHHHHIIIHHHHHII",
++        0x02014B50, 20, 20, 0, 0, 0, date,
++        crc, len(content), len(content), name_len, 0, 0, 0, 0, 0, 0,
++    ) + name_bytes
++    eocd = struct.pack(
++        "<IHHHHIIH",
++        0x06054B50, 0, 0, 1, 1,
++        len(central), len(local), 0,
++    )
++    return local + central + eocd
++
++
++def test_zip_flagless_gbk_name_extracts_as_mojibake(data_root):
++    """Pins CURRENT behavior: zipfile decodes flag-less member names as cp437
++    (api/files.py:3017 reads with no explicit encoding), so a GBK archive
++    from a Chinese-Windows tool extracts under a mojibake name. This is the
++    known Windows-encoding pitfall — the desktop adapter should re-decode
++    such names (origin codepage) before surfacing them. If that fix lands,
++    this test must be updated (assert 中文.txt present) rather than deleted."""
++    gbk_name = "中文.txt".encode("gbk")
++    archive = data_root / "gbk_archive.zip"
++    archive.write_bytes(_build_flagless_gbk_zip(gbk_name, b"data"))
++
++    res = run_async(files.extract_archive(files.ExtractRequest(path=archive.name)))
++    assert res["success"] is True
++    extracted = data_root / "gbk_archive"
++    assert (extracted / "中文.txt").exists() is False    # not decoded as GBK
++    names = [p.name for p in extracted.iterdir()]
++    assert len(names) == 1                               # something extracted
++    assert names[0] != "中文.txt"                        # ...under a mojibake name
+-- 
+2.43.0
+
