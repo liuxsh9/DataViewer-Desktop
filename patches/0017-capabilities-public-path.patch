@@ -1,0 +1,33 @@
+From 821613217eb8147b52172b58eaaa8794f8ea3402 Mon Sep 17 00:00:00 2001
+From: DataViewer-Desktop Sync <sync@dataviewer-desktop.local>
+Date: Thu, 20 Aug 2026 22:05:19 +0800
+Subject: [PATCH] =?UTF-8?q?fix(desktop):=20/api/capabilities=20=E5=8A=A0?=
+ =?UTF-8?q?=E5=85=A5=E9=89=B4=E6=9D=83=E7=99=BD=E5=90=8D=E5=8D=95=EF=BC=88?=
+ =?UTF-8?q?v4.10.1=20=E6=96=B0=E5=A2=9E=20auth=5Fmiddleware=20=E6=8B=A6?=
+ =?UTF-8?q?=E6=88=AA=EF=BC=89?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/middleware/auth_middleware.py | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/backend/middleware/auth_middleware.py b/backend/middleware/auth_middleware.py
+index 3917cbc..6eb7c90 100644
+--- a/backend/middleware/auth_middleware.py
++++ b/backend/middleware/auth_middleware.py
+@@ -16,6 +16,9 @@ PUBLIC_PATHS = [
+     "/",
+     "/health",
+     "/api/health",
++    # Desktop capability probe — the frontend fetches this at startup before
++    # login to decide which feature entries to render; it leaks no data.
++    "/api/capabilities",
+     "/docs",
+     "/openapi.json",
+     "/redoc",
+-- 
+2.43.0
+
