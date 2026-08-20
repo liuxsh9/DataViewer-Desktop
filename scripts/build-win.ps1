@@ -88,13 +88,49 @@ WORKBENCH_ENABLED=false
 @"
 DataViewer Desktop $Version (绿色包)
 
-启动: 解压后运行 start.bat（M3 提供）或:
-  .\python\python.exe -m uvicorn main:app --app-dir backend --port 8888
-然后浏览器打开 http://127.0.0.1:8888
+启动: 双击 start.bat（M2 简化版；M3 由 pystray 托盘启动器取代）
+然后浏览器自动打开 http://127.0.0.1:8888
 
-配置: 见 desktop.env.template（launcher 自动加载）
+首次启动: start.bat 自动生成 %LOCALAPPDATA%\DataViewerDesktop\secrets.env
+（JWT_SECRET_KEY 随机生成；ADMIN_PASSWORD 默认 admin123，登录后请修改）
+
+配置: 见 desktop.env.template；外网能力首版默认全关（D4/D5/D6）
 数据: %USERPROFILE%\DataViewerData（DATA_ROOT），元数据/日志在 %LOCALAPPDATA%\DataViewerDesktop
 "@ | Out-File -FilePath (Join-Path $OutputDir "README-使用说明.md") -Encoding utf8
+
+# start.bat（M2 简化版启动脚本：生成 secrets → 起 uvicorn → 开浏览器）
+@"
+@echo off
+REM DataViewer Desktop $Version — M2 简化版启动脚本（M3 由 pystray launcher 取代）
+setlocal
+set "APP_DIR=%~dp0"
+set "DATA_ROOT=%USERPROFILE%\DataViewerData"
+set "CONF_DIR=%LOCALAPPDATA%\DataViewerDesktop"
+set "METADATA_DIR=%CONF_DIR%\metadata"
+set "LOG_DIR=%CONF_DIR%\logs"
+if not exist "%CONF_DIR%" mkdir "%CONF_DIR%"
+if not exist "%CONF_DIR%\secrets.env" (
+  "%APP_DIR%python\python.exe" -c "import secrets,pathlib; p=pathlib.Path(r'%CONF_DIR%'); p.mkdir(parents=True,exist_ok=True); (p/'secrets.env').write_text('JWT_SECRET_KEY='+secrets.token_hex(32)+chr(10)+'ADMIN_PASSWORD=admin123'+chr(10))"
+)
+set "DV_SECRETS_FILE=%CONF_DIR%\secrets.env"
+REM 首版禁用（D4/D5/D6）：外网能力全关
+set GATEWAY_PUSH_ENABLED=false
+set DATALAB_ENABLED=false
+set HF_ENABLED=false
+set ARENA_ENABLED=false
+set CLAUDE_ENABLED=false
+set S3_ENABLED=false
+set VOLCENGINE_ENABLED=false
+set SCP_ENABLED=false
+set QUALITY_RAY_ENABLED=false
+set TRAJ_VIZ_ENABLED=false
+set WORKBENCH_ENABLED=false
+set PORT=8888
+start "" /b "%APP_DIR%python\python.exe" -m uvicorn main:app --app-dir "%APP_DIR%backend" --host 127.0.0.1 --port %PORT%
+timeout /t 3 /nobreak >nul
+start http://127.0.0.1:%PORT%
+echo DataViewer Desktop 已启动: http://127.0.0.1:%PORT% （关闭本窗口不会停服务；任务管理器结束 python 或运行 stop.bat）
+"@ | Out-File -FilePath (Join-Path $OutputDir "start.bat") -Encoding ascii
 
 # 5. 打包 zip
 Write-Host "[build] 打包 zip..."
