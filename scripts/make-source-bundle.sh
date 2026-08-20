@@ -27,8 +27,9 @@ tar czf "$OUT" -C "$WORKTREE" \
 
 echo "[bundle] 完成: $OUT ($(du -h "$OUT" | cut -f1))"
 cat <<EOF
-上传指引:
-  1. 在 GitHub 仓库建 release（或上传到任意可下载 URL）
-  2. 手动触发 ci/windows-build.yml，source_archive_url 填下载地址
-  3. 产物: 绿色包 zip（artifact 可下载，Windows 真机解压冒烟）
+上传指引（本机 gh 已登录 liuxsh9，直接执行）:
+  1. gh release create "$VERSION-src" "$OUT" --title "源码包 $VERSION"
+  2. gh workflow run windows-build.yml -f version="$VERSION"
+  3. gh run watch（等构建完）
+  4. 产物: 绿色包 zip（artifact 可下载，Windows 真机解压冒烟）
 EOF

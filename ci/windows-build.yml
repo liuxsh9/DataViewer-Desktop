@@ -1,23 +1,17 @@
 # DataViewer-Desktop — Windows 构建 + 冒烟（D7 已定 GitHub Actions windows-latest）
 #
 # 上游源码获取：内网 CodeHub 对 runner 不可达，dev box 用
-# scripts/make-source-bundle.sh 打包源码 tar 后上传，workflow_dispatch 传
-# source_archive_url。后续可评估 GitHub mirror 方案。
-#
-# 已知失败（环境性，与补丁无关）：test_format_ops_api.py::TestTaskAccess::
-# test_report_panguml_shape 依赖 workbench :8120 在线，CI 无 workbench，
-# 用 --deselect 明确排除（Linux 侧跑全量时同样存在该失败）。
+# scripts/make-source-bundle.sh 打包源码 tar 后 `gh release create <版本>-src`
+# 上传到本仓 release；本 workflow 用 gh CLI（GITHUB_TOKEN 自动注入）下载。
+# 后续可评估 GitHub mirror 方案。
 
 name: windows-build
 
 on:
   workflow_dispatch:
     inputs:
-      source_archive_url:
-        description: "源码包下载 URL（make-source-bundle.sh 产物）"
-        required: true
       version:
-        description: "版本号（如 v4.13.0-d1）"
+        description: "版本号（如 v4.13.0-d1）；源码包需已上传到 <版本>-src release"
         required: true
         default: "v4.13.0-d1"
 
@@ -31,10 +25,12 @@ jobs:
       - name: Checkout 本仓（拿脚本）
         uses: actions/checkout@v4
 
-      - name: 下载源码包
+      - name: 下载源码包（<版本>-src release asset）
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          Invoke-WebRequest -Uri "${{ inputs.source_archive_url }}" -OutFile source.tar.gz
+          gh release download "${{ inputs.version }}-src" --pattern "source-*.tar.gz" --output source.tar.gz
           New-Item -ItemType Directory -Force upstream | Out-Null
           tar -xzf source.tar.gz -C upstream
 
