@@ -154,8 +154,8 @@ jobs:
             if (-not $tok) { throw "setup 未返回 access_token" }
             $disk = Invoke-WebRequest -Uri "http://127.0.0.1:8888/api/system/disk-space" -Headers @{ Authorization = "Bearer $tok" } -TimeoutSec 5
             if ($disk.StatusCode -ne 200) { throw "disk-space 异常: $($disk.StatusCode)" }
-            # 多根盘符浏览（D16/补丁 0019）：/api/files/root 应列出 data 根 + Windows 盘符
-            $rootInfo = (Invoke-WebRequest -Uri "http://127.0.0.1:8888/api/files/root").Content | ConvertFrom-Json
+            # 多根盘符浏览（D16/补丁 0019）：/api/files/root（带 token）应列出 data 根 + Windows 盘符
+            $rootInfo = (Invoke-WebRequest -Uri "http://127.0.0.1:8888/api/files/root" -Headers @{ Authorization = "Bearer $tok" }).Content | ConvertFrom-Json
             $rootKeys = @($rootInfo.available.PSObject.Properties.Name)
             if ($rootKeys -notcontains "data") { throw "files/root 缺 data 根: $($rootKeys -join ',')" }
             if ($rootKeys -notcontains "C:") { throw "files/root 缺盘符根 C:: $($rootKeys -join ',')" }
