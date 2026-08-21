@@ -1,0 +1,608 @@
+From 0548b1663d57cad506c1ccef8243f8fed5fe098f Mon Sep 17 00:00:00 2001
+From: DataViewer-Desktop Sync <sync@dataviewer-desktop.local>
+Date: Fri, 21 Aug 2026 19:00:50 +0800
+Subject: [PATCH] feat(desktop): multi-root drive browsing backend (D16)
+
+File Explorer roots: on Windows enumerate every mounted drive (C:\, D:\ ...
+incl. removable) alongside the app data root; POSIX keeps {data, home}.
+- safe_path rewritten cross-platform (pathlib drive-letter/separator aware);
+  preserves the legacy root-relative semantics for other absolute paths.
+- root-relative paths returned by the File Explorer are normalized to forward
+  slashes via .as_posix() so the frontend sees one separator convention.
+- /api/system/disk-space reports the current runtime root, not static DATA_ROOT.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/api/files.py                         | 172 +++++++++++--------
+ backend/api/system.py                        |  15 +-
+ backend/tests/test_windows_file_semantics.py |  33 ++++
+ 3 files changed, 142 insertions(+), 78 deletions(-)
+
+diff --git a/backend/api/files.py b/backend/api/files.py
+index baf40d1..e96e461 100644
+--- a/backend/api/files.py
++++ b/backend/api/files.py
+@@ -315,14 +315,29 @@ def format_size(size: int) -> str:
+ 
+ router = APIRouter()
+ 
+-# Configurable root paths
++# Configurable root paths. The File Explorer can browse multiple roots: the
++# app's data root plus, on Windows, every mounted drive root (C:\, D:\ ...
++# including removable/USB drives) so users can reach their files the way a
++# native Windows Explorer does. The drive list is probed once at import; the
++# rest of the backend is platform-agnostic and only ever sees this uniform
++# mapping (hot-plug refresh is out of scope for the first release).
+ from config import DATA_ROOT as _CONFIG_DATA_ROOT
+-ALLOWED_ROOTS = {
+-    "data": _CONFIG_DATA_ROOT,
+-    "home": "/home"
+-}
+ 
+-# Current active root path (default to /data)
++def _discover_roots() -> dict:
++    import string
++    roots = {"data": _CONFIG_DATA_ROOT}
++    if os.name == "nt":
++        for letter in string.ascii_uppercase:
++            drive = f"{letter}:\\"
++            if os.path.exists(drive):
++                roots[f"{letter}:"] = drive
++    else:
++        roots["home"] = "/home"
++    return roots
++
++ALLOWED_ROOTS = _discover_roots()
++
++# Current active root path (default to the data root)
+ _current_root = "data"
+ 
+ def get_data_root() -> str:
+@@ -365,26 +380,33 @@ class ScpServerRequest(BaseModel):
+     password: str = Field(..., min_length=1, description="SSH password")
+ 
+ def safe_path(path: str) -> Path:
+-    """Ensure path is within current DATA_ROOT.
+-
+-    Accepts both DATA_ROOT-relative (`s3_data/...`) and DATA_ROOT-absolute
+-    (`/data/s3_data/...`) forms — the latter must not be joined under the root
+-    again (that produced `/data/data/...` and a misleading 404 "Path not found"
+-    for folders that exist). Mirrors the convention already used by
+-    `api/aggregation._resolve_rel`, so the file listing and the aggregation
+-    overlay agree on the same path.
++    """Ensure path is within the current root.
++
++    Accepts both root-relative (`s3_data/...`) and root-absolute (the root's
++    native notation, e.g. `/data/s3_data/...` on POSIX or `C:\\s3_data\\...` on
++    Windows) forms — the latter must not be joined under the root again (that
++    produced `/data/data/...` and a misleading 404 "Path not found" for folders
++    that exist). Mirrors the convention already used by `api.aggregation._resolve_rel`.
++
++    Any other absolute path (e.g. `/etc/passwd` on POSIX) keeps the legacy
++    semantics: leading separators are stripped and the path is treated as
++    root-relative. Pathlib handles the platform separator/drive-letter details
++    (forward vs back slash, `C:` vs `C:\\`, case-insensitive `relative_to`).
+     """
+-    DATA_ROOT = get_data_root()
+-    root = Path(DATA_ROOT).resolve()
+-    s = str(path)
+-    root_s = str(root)
+-    if s == root_s:
+-        rel = ""
+-    elif s.startswith(root_s + "/"):
+-        rel = s[len(root_s):].lstrip("/")
++    root = Path(get_data_root()).resolve()
++    if not path:
++        return root
++    p = Path(path)
++    if p.is_absolute():
++        # Absolute path. Only a root-prefixed one is "already absolute"; anything
++        # else falls through to the legacy root-relative interpretation below.
++        try:
++            p.resolve().relative_to(root)
++            full_path = p.resolve()
++        except ValueError:
++            full_path = (root / str(path).lstrip("/\\")).resolve()
+     else:
+-        rel = path.lstrip("/")
+-    full_path = (root / rel).resolve()
++        full_path = (root / str(path).lstrip("/\\")).resolve()
+     try:
+         full_path.relative_to(root)
+         return full_path
+@@ -436,7 +458,7 @@ async def list_files(path: str = ""):
+             stat = item.stat()
+             item_data = {
+                 "name": item.name,
+-                "path": str(item.relative_to(DATA_ROOT)),
++                "path": item.relative_to(DATA_ROOT).as_posix(),
+                 "type": "directory" if item.is_dir() else "file",
+                 "size": stat.st_size if item.is_file() else None,
+                 "modified": stat.st_mtime,
+@@ -487,7 +509,7 @@ async def file_info(path: str):
+ 
+         info = {
+             "name": target_path.name,
+-            "path": str(target_path.relative_to(DATA_ROOT)),
++            "path": target_path.relative_to(DATA_ROOT).as_posix(),
+             "type": "directory" if target_path.is_dir() else "file",
+             "size": stat.st_size,
+             "modified": stat.st_mtime,
+@@ -712,7 +734,7 @@ async def upload_file(
+ 
+         return {
+             "message": "File uploaded successfully",
+-            "path": str(file_path.relative_to(DATA_ROOT)),
++            "path": file_path.relative_to(DATA_ROOT).as_posix(),
+             "size": total_size
+         }
+     except Exception as e:
+@@ -856,7 +878,7 @@ async def complete_upload(request: Request, body: UploadCompleteRequest):
+         if success:
+             return {
+                 "message": "File uploaded successfully",
+-                "path": str(final_path.relative_to(DATA_ROOT)),
++                "path": final_path.relative_to(DATA_ROOT).as_posix(),
+                 "size": session.total_size
+             }
+         else:
+@@ -919,7 +941,7 @@ async def download_from_url(request: DownloadFromUrlRequest):
+ 
+         # Block downloads into locked (aggregation baseline) folders
+         from services.folder_lock_manager import check_write_permission as _lock_check
+-        _lock_allowed, _lock_err = _lock_check(str(target_dir.relative_to(DATA_ROOT)))
++        _lock_allowed, _lock_err = _lock_check(target_dir.relative_to(DATA_ROOT).as_posix())
+         if not _lock_allowed:
+             raise HTTPException(status_code=403, detail=_lock_err)
+ 
+@@ -1060,12 +1082,12 @@ async def create_directory(request: Request, operation: FileOperation):
+ 
+         # Register as personal folder if requested
+         if operation.is_personal:
+-            rel_path = str(target_path.relative_to(DATA_ROOT))
++            rel_path = target_path.relative_to(DATA_ROOT).as_posix()
+             register_personal_folder(rel_path, username)
+ 
+         return {
+             "message": "Directory created successfully",
+-            "path": str(target_path.relative_to(DATA_ROOT)),
++            "path": target_path.relative_to(DATA_ROOT).as_posix(),
+             "is_personal": operation.is_personal
+         }
+     except FileExistsError:
+@@ -1192,7 +1214,7 @@ async def copy_file(request: Request, operation: MoveOperation):
+             for source_file, dest_file in files_to_verify:
+                 verification = verify_copy(source_file, dest_file)
+                 verification_results.append({
+-                    "file": str(source_file.relative_to(source_path)),
++                    "file": source_file.relative_to(source_path).as_posix(),
+                     **verification
+                 })
+ 
+@@ -1236,8 +1258,8 @@ async def copy_file(request: Request, operation: MoveOperation):
+ 
+         return {
+             "message": "Copied and verified successfully",
+-            "source": str(source_path.relative_to(DATA_ROOT)),
+-            "destination": str(dest_path.relative_to(DATA_ROOT)),
++            "source": source_path.relative_to(DATA_ROOT).as_posix(),
++            "destination": dest_path.relative_to(DATA_ROOT).as_posix(),
+             "files_copied": files_copied,
+             "total_size": total_size,
+             "verification": {
+@@ -1293,12 +1315,12 @@ async def move_file(request: Request, operation: MoveOperation):
+             raise HTTPException(status_code=403, detail=f"Destination: {error_msg}")
+ 
+         # Check if moving a personal folder root
+-        source_rel = str(source_path.relative_to(DATA_ROOT))
++        source_rel = source_path.relative_to(DATA_ROOT).as_posix()
+         pf_info = get_personal_folder_info(source_rel)
+         is_moving_personal_root = pf_info is not None
+ 
+         # Get relative paths for metadata
+-        source_rel = str(source_path.relative_to(DATA_ROOT))
++        source_rel = source_path.relative_to(DATA_ROOT).as_posix()
+ 
+         # Collect the source file list BEFORE the move (source_path must still
+         # exist). shutil.move may NEST the source (dest already exists as a
+@@ -1312,7 +1334,7 @@ async def move_file(request: Request, operation: MoveOperation):
+             for root, dirs, files in os.walk(source_path):
+                 for file in files:
+                     file_source_path = Path(root) / file
+-                    source_file_rels.append(str(file_source_path.relative_to(DATA_ROOT)))
++                    source_file_rels.append(file_source_path.relative_to(DATA_ROOT).as_posix())
+ 
+         # Move the file/directory
+         dest_path.parent.mkdir(parents=True, exist_ok=True)
+@@ -1321,7 +1343,7 @@ async def move_file(request: Request, operation: MoveOperation):
+         # so the pre-computed dest path would be wrong. Derive every metadata
+         # update from the resolved return path.
+         real_dest_path = Path(shutil.move(str(source_path), str(dest_path)))
+-        real_dest_rel = str(real_dest_path.relative_to(DATA_ROOT))
++        real_dest_rel = real_dest_path.relative_to(DATA_ROOT).as_posix()
+ 
+         # Build metadata path pairs from the REAL destination. Each file's new
+         # path = real_dest_rel + (file_source_rel - source_rel).
+@@ -1430,7 +1452,7 @@ async def rename_file(request: Request, operation: RenameOperation):
+             raise HTTPException(status_code=403, detail=error_msg)
+ 
+         # Check if renaming a personal folder root
+-        source_rel = str(source_path.relative_to(DATA_ROOT))
++        source_rel = source_path.relative_to(DATA_ROOT).as_posix()
+         pf_info = get_personal_folder_info(source_rel)
+         is_renaming_personal_root = pf_info is not None
+ 
+@@ -1445,8 +1467,8 @@ async def rename_file(request: Request, operation: RenameOperation):
+             raise HTTPException(status_code=400, detail="A file or directory with that name already exists")
+ 
+         # Get relative paths for metadata
+-        source_rel = str(source_path.relative_to(DATA_ROOT))
+-        dest_rel = str(dest_path.relative_to(DATA_ROOT))
++        source_rel = source_path.relative_to(DATA_ROOT).as_posix()
++        dest_rel = dest_path.relative_to(DATA_ROOT).as_posix()
+ 
+         # Collect all files that will be renamed (for metadata update)
+         files_to_update = []
+@@ -1457,12 +1479,12 @@ async def rename_file(request: Request, operation: RenameOperation):
+             for root, dirs, files in os.walk(source_path):
+                 for file in files:
+                     file_source_path = Path(root) / file
+-                    file_source_rel = str(file_source_path.relative_to(DATA_ROOT))
++                    file_source_rel = file_source_path.relative_to(DATA_ROOT).as_posix()
+ 
+                     # Calculate destination path
+                     file_rel_to_source = file_source_path.relative_to(source_path)
+                     file_dest_path = dest_path / file_rel_to_source
+-                    file_dest_rel = str(file_dest_path.relative_to(DATA_ROOT))
++                    file_dest_rel = file_dest_path.relative_to(DATA_ROOT).as_posix()
+ 
+                     files_to_update.append((file_source_rel, file_dest_rel))
+ 
+@@ -2033,7 +2055,7 @@ async def list_files_recursive(path: str = "", max_files: int = 50):
+                         stat = item.stat()
+                         files.append({
+                             "name": item.name,
+-                            "path": str(item.relative_to(DATA_ROOT)),
++                            "path": item.relative_to(DATA_ROOT).as_posix(),
+                             "size": stat.st_size,
+                             "modified": stat.st_mtime,
+                             "extension": item.suffix
+@@ -2384,8 +2406,8 @@ async def convert_arena_jsonl_to_parquet(path: str = Body(..., embed=True)):
+         DATA_ROOT = Path(get_data_root())
+         return {
+             "message": "Conversion completed successfully",
+-            "input_file": str(target_path.relative_to(DATA_ROOT)),
+-            "output_file": str(output_path.relative_to(DATA_ROOT)),
++            "input_file": target_path.relative_to(DATA_ROOT).as_posix(),
++            "output_file": output_path.relative_to(DATA_ROOT).as_posix(),
+             "total_lines": line_count,
+             "converted_lines": len(data),
+             "error_lines": error_lines if error_lines else None,
+@@ -2500,8 +2522,8 @@ async def convert_arena_json_to_parquet(path: str = Body(..., embed=True)):
+         DATA_ROOT = Path(get_data_root())
+         return {
+             "message": "Conversion completed successfully",
+-            "input_file": str(target_path.relative_to(DATA_ROOT)),
+-            "output_file": str(output_path.relative_to(DATA_ROOT)),
++            "input_file": target_path.relative_to(DATA_ROOT).as_posix(),
++            "output_file": output_path.relative_to(DATA_ROOT).as_posix(),
+             "total_records": total_records,
+             "converted_records": len(data),
+             "error_indices": error_indices if error_indices else None,
+@@ -2570,7 +2592,7 @@ async def get_folder_tree_stats(path: str = "", max_depth: int = 10, max_workers
+             jsonl_files = []
+             structure = {
+                 "name": current_path.name if current_path != target_path else path or "/",
+-                "path": str(current_path.relative_to(DATA_ROOT)),
++                "path": current_path.relative_to(DATA_ROOT).as_posix(),
+                 "type": "directory",
+                 "children": [],
+                 "total_lines": 0,
+@@ -2593,7 +2615,7 @@ async def get_folder_tree_stats(path: str = "", max_depth: int = 10, max_workers
+                         jsonl_files.extend(child_files)
+                     elif item.is_file() and item.suffix == ".jsonl":
+                         # Get relative path
+-                        rel_path = str(item.relative_to(Path(DATA_ROOT)))
++                        rel_path = item.relative_to(Path(DATA_ROOT)).as_posix()
+ 
+                         # Add file to structure (without line count yet)
+                         file_node = {
+@@ -2731,7 +2753,7 @@ async def get_folder_tree_stats_stream(path: str = "", max_depth: int = 10, max_
+         jsonl_files = []
+         structure = {
+             "name": current_path.name if current_path != target_path else path or "/",
+-            "path": str(current_path.relative_to(DATA_ROOT)),
++            "path": current_path.relative_to(DATA_ROOT).as_posix(),
+             "type": "directory",
+             "children": [],
+             "total_lines": 0,
+@@ -2752,7 +2774,7 @@ async def get_folder_tree_stats_stream(path: str = "", max_depth: int = 10, max_
+                     structure["children"].append(child_structure)
+                     jsonl_files.extend(child_files)
+                 elif item.is_file() and item.suffix == ".jsonl":
+-                    rel_path = str(item.relative_to(Path(DATA_ROOT)))
++                    rel_path = item.relative_to(Path(DATA_ROOT)).as_posix()
+                     file_node = {
+                         "name": item.name,
+                         "path": rel_path,
+@@ -2973,7 +2995,7 @@ async def extract_archive(request: ExtractRequest):
+ 
+         # Block extraction into locked (aggregation baseline) folders
+         from services.folder_lock_manager import check_write_permission as _lock_check
+-        _lock_allowed, _lock_err = _lock_check(str(archive_path.parent.relative_to(DATA_ROOT)))
++        _lock_allowed, _lock_err = _lock_check(archive_path.parent.relative_to(DATA_ROOT).as_posix())
+         if not _lock_allowed:
+             raise HTTPException(status_code=403, detail=_lock_err)
+ 
+@@ -3125,7 +3147,7 @@ async def extract_archive(request: ExtractRequest):
+         return {
+             "success": True,
+             "archive": request.path,
+-            "extracted_to": str(extract_folder.relative_to(DATA_ROOT)),
++            "extracted_to": extract_folder.relative_to(DATA_ROOT).as_posix(),
+             "message": f"Successfully extracted to {extract_folder.name}/"
+         }
+     
+@@ -3395,7 +3417,7 @@ async def get_folder_sizes(path: str = "", max_depth: int = 1):
+         def build_folder_tree(current_path: Path, depth: int = 0) -> dict:
+             result = {
+                 "name": current_path.name if current_path != target_path else path or "/",
+-                "path": str(current_path.relative_to(DATA_ROOT)),
++                "path": current_path.relative_to(DATA_ROOT).as_posix(),
+                 "type": "directory",
+                 "size": get_size(current_path),
+                 "children": []
+@@ -3414,7 +3436,7 @@ async def get_folder_sizes(path: str = "", max_depth: int = 1):
+             for subdir in subdirs:
+                 child_info = {
+                     "name": subdir.name,
+-                    "path": str(subdir.relative_to(DATA_ROOT)),
++                    "path": subdir.relative_to(DATA_ROOT).as_posix(),
+                     "type": "directory",
+                     "size": get_size(subdir)
+                 }
+@@ -3433,7 +3455,7 @@ async def get_folder_sizes(path: str = "", max_depth: int = 1):
+ 
+         return {
+             "path": path,
+-            "root": str(target_path.relative_to(DATA_ROOT)),
++            "root": target_path.relative_to(DATA_ROOT).as_posix(),
+             "data": folder_tree
+         }
+ 
+@@ -3478,7 +3500,7 @@ async def get_folder_jsonl_stats(
+ 
+                 # 获取相对路径
+                 DATA_ROOT = Path(get_data_root())
+-                relative_path = str(jsonl_file.relative_to(DATA_ROOT))
++                relative_path = jsonl_file.relative_to(DATA_ROOT).as_posix()
+ 
+                 jsonl_files.append({
+                     "path": relative_path,
+@@ -3536,7 +3558,7 @@ async def sample_folder_jsonl(
+ 
+         # Block writes into locked (aggregation baseline) folders
+         from services.folder_lock_manager import check_write_permission as _lock_check
+-        _lock_allowed, _lock_err = _lock_check(str(target_path.relative_to(DATA_ROOT)))
++        _lock_allowed, _lock_err = _lock_check(target_path.relative_to(DATA_ROOT).as_posix())
+         if not _lock_allowed:
+             raise HTTPException(status_code=403, detail=_lock_err)
+ 
+@@ -3620,7 +3642,7 @@ async def sample_folder_jsonl(
+                     await f.write(line + '\n')
+ 
+             sampled_files.append({
+-                "path": str(output_file.relative_to(DATA_ROOT)),
++                "path": output_file.relative_to(DATA_ROOT).as_posix(),
+                 "lines": len(sampled_lines)
+             })
+ 
+@@ -3664,7 +3686,7 @@ async def sample_folder_jsonl(
+                         await f.write(line + '\n')
+ 
+                 sampled_files.append({
+-                    "path": str(output_file.relative_to(DATA_ROOT)),
++                    "path": output_file.relative_to(DATA_ROOT).as_posix(),
+                     "lines": len(reservoir)
+                 })
+ 
+@@ -3674,7 +3696,7 @@ async def sample_folder_jsonl(
+         return {
+             "message": "Folder sampling completed successfully",
+             "source_folder": path,
+-            "output_folder": str(output_base.relative_to(DATA_ROOT)),
++            "output_folder": output_base.relative_to(DATA_ROOT).as_posix(),
+             "sample_mode": sample_mode,
+             "sample_value": sample_value,
+             "output_mode": output_mode,
+@@ -4009,7 +4031,7 @@ async def merge_jsonl_files(
+         # Determine output path
+         output_folder_path = safe_path(output_folder) if output_folder else safe_path("")
+         from services.folder_lock_manager import check_write_permission as _lock_check
+-        _lock_allowed, _lock_err = _lock_check(str(output_folder_path.relative_to(Path(get_data_root()))))
++        _lock_allowed, _lock_err = _lock_check(output_folder_path.relative_to(Path(get_data_root())).as_posix())
+         if not _lock_allowed:
+             raise HTTPException(status_code=403, detail=_lock_err)
+         if not output_folder_path.exists():
+@@ -4050,7 +4072,7 @@ async def merge_jsonl_files(
+ 
+             return {
+                 "success": True,
+-                "output_file": str(output_file_path.relative_to(safe_path(""))),
++                "output_file": output_file_path.relative_to(safe_path("")).as_posix(),
+                 "source_count": len(file_paths),
+                 "total_lines": total_lines,
+                 "message": f"Successfully merged {len(file_paths)} files into {output_name}"
+@@ -4165,7 +4187,7 @@ async def split_jsonl_file(
+         # Prepare output folder
+         output_folder_path = safe_path(output_folder) if output_folder else source_path.parent
+         from services.folder_lock_manager import check_write_permission as _lock_check
+-        _lock_allowed, _lock_err = _lock_check(str(output_folder_path.relative_to(Path(get_data_root()))))
++        _lock_allowed, _lock_err = _lock_check(output_folder_path.relative_to(Path(get_data_root())).as_posix())
+         if not _lock_allowed:
+             raise HTTPException(status_code=403, detail=_lock_err)
+         if not output_folder_path.exists():
+@@ -4221,7 +4243,7 @@ async def split_jsonl_file(
+ 
+             output_files.append({
+                 "filename": output_name,
+-                "path": str(output_path.relative_to(safe_path(""))),
++                "path": output_path.relative_to(safe_path("")).as_posix(),
+                 "lines": len(lines_to_write)
+             })
+ 
+@@ -4337,7 +4359,7 @@ def _split_single_jsonl_file(file_path_str: str, max_lines: int, output_suffix:
+             current_file.close()
+ 
+         return {
+-            "file": str(file_path.relative_to(Path(source_folder))),
++            "file": file_path.relative_to(Path(source_folder)).as_posix(),
+             "status": "success",
+             "total_lines": total_lines,
+             "parts": len(output_files),
+@@ -4392,7 +4414,7 @@ async def split_folder_jsonl(
+ 
+         # Block writes into locked (aggregation baseline) folders
+         from services.folder_lock_manager import check_write_permission as _lock_check
+-        _lock_allowed, _lock_err = _lock_check(str(output_folder.relative_to(DATA_ROOT)))
++        _lock_allowed, _lock_err = _lock_check(output_folder.relative_to(DATA_ROOT).as_posix())
+         if not _lock_allowed:
+             raise HTTPException(status_code=403, detail=_lock_err)
+ 
+@@ -4451,7 +4473,7 @@ async def split_folder_jsonl(
+                     file_path = futures[future]
+                     logger.error(f"Error processing {file_path}: {e}")
+                     results.append({
+-                        "file": str(file_path.relative_to(source_path)),
++                        "file": file_path.relative_to(source_path).as_posix(),
+                         "status": "error",
+                         "error": str(e)
+                     })
+@@ -4460,7 +4482,7 @@ async def split_folder_jsonl(
+         logger.info(f"Batch split complete: {total_processed} processed, {total_skipped} skipped, {total_errors} errors, {total_parts_created} parts created")
+ 
+         # Get relative path for output folder
+-        output_folder_relative = str(output_folder.relative_to(DATA_ROOT))
++        output_folder_relative = output_folder.relative_to(DATA_ROOT).as_posix()
+ 
+         return {
+             "success": True,
+@@ -4621,7 +4643,7 @@ async def clean_jsonl_metadata(request: CleanMetadataRequest):
+         return {
+             "success": True,
+             "source_file": file_path,
+-            "output_file": str(final_path.relative_to(safe_path(""))),
++            "output_file": final_path.relative_to(safe_path("")).as_posix(),
+             "total_lines": total_lines,
+             "cleaned_lines": cleaned_lines,
+             "error_lines": error_lines,
+@@ -4922,7 +4944,7 @@ async def update_jsonl_extra_info(request: UpdateExtraInfoRequest):
+             "updated_lines": updated_lines,
+             "error_lines": error_lines,
+             "lines_with_moved_fields": lines_with_moved_fields,  # Lines where top-level fields were moved to info field
+-            "output_file": str(final_path.relative_to(get_data_root())) if str(final_path).startswith(get_data_root()) else final_path.name,
++            "output_file": final_path.relative_to(get_data_root()).as_posix() if str(final_path).startswith(get_data_root()) else final_path.name,
+             "extra_info_fields": list(filtered_extra_info.keys()),
+             "info_field_name": detected_info_field,  # Report which field was actually updated
+             "message": f"Successfully updated {detected_info_field} in {updated_lines} lines" + (f" ({lines_with_moved_fields} lines had fields moved into {detected_info_field})" if lines_with_moved_fields > 0 else "")
+@@ -5333,7 +5355,7 @@ async def jsonl_keyword_replace(request: KeywordReplaceRequest):
+         return {
+             "success": True,
+             "source_file": request.path,
+-            "output_file": str(final_path.relative_to(get_data_root())) if str(final_path).startswith(get_data_root()) else final_path.name,
++            "output_file": final_path.relative_to(get_data_root()).as_posix() if str(final_path).startswith(get_data_root()) else final_path.name,
+             "output_mode": request.output_mode,
+             "total_lines": total_lines,
+             "lines_modified": lines_modified,
+@@ -5694,7 +5716,7 @@ async def convert_parquet_to_jsonl(
+ 
+         # Block writes into locked (aggregation baseline) folders
+         from services.folder_lock_manager import check_write_permission as _lock_check
+-        _lock_allowed, _lock_err = _lock_check(str(output_file.parent.relative_to(Path(get_data_root()))))
++        _lock_allowed, _lock_err = _lock_check(output_file.parent.relative_to(Path(get_data_root())).as_posix())
+         if not _lock_allowed:
+             raise HTTPException(status_code=403, detail=_lock_err)
+ 
+@@ -6115,7 +6137,7 @@ async def create_scp_download(request: ScpDownloadRequest):
+         target_dir = safe_path(request.target_path)
+         # Block writes into locked (aggregation baseline) folders
+         from services.folder_lock_manager import check_write_permission as _lock_check
+-        _lock_allowed, _lock_err = _lock_check(str(target_dir.relative_to(Path(get_data_root()))))
++        _lock_allowed, _lock_err = _lock_check(target_dir.relative_to(Path(get_data_root())).as_posix())
+         if not _lock_allowed:
+             raise HTTPException(status_code=403, detail=_lock_err)
+         if not target_dir.exists():
+diff --git a/backend/api/system.py b/backend/api/system.py
+index fa21a45..c554fbc 100644
+--- a/backend/api/system.py
++++ b/backend/api/system.py
+@@ -12,10 +12,19 @@ router = APIRouter()
+ 
+ @router.get("/disk-space")
+ async def get_disk_space():
+-    """Get disk space information for data directory"""
+-    stat = shutil.disk_usage(DATA_ROOT)
++    """Get disk space information for the current File Explorer root.
++
++    Uses the runtime root (api.files.get_data_root) rather than the static
++    config DATA_ROOT, so the widget reflects whichever root (data dir or a
++    drive like C:\\) the user is currently browsing. Lazy import avoids a
++    circular import (files -> ... -> system is not a cycle, but keep it local
++    for symmetry with api_token.py/token_ops.py).
++    """
++    from api.files import get_data_root
++    root = get_data_root()
++    stat = shutil.disk_usage(root)
+     return {
+-        "path": DATA_ROOT,
++        "path": root,
+         "total": stat.total,
+         "used": stat.used,
+         "free": stat.free,
+diff --git a/backend/tests/test_windows_file_semantics.py b/backend/tests/test_windows_file_semantics.py
+index 5577c57..866a9b0 100644
+--- a/backend/tests/test_windows_file_semantics.py
++++ b/backend/tests/test_windows_file_semantics.py
+@@ -270,6 +270,39 @@ def test_win32_stored_rel_path_uses_backslash_separators(cfg_root):
+     assert abs_path == os.path.join(str(cfg_root), "a", "b.jsonl")
+ 
+ 
++# ---------------------------------------------------------------------------
++# Group 5b — multi-root drive browsing (D16)
++# ---------------------------------------------------------------------------
++
++@pytest.mark.skipif(sys.platform != "win32",
++                    reason="drive-root enumeration is a Windows concept")
++def test_win32_allowed_roots_enumerates_drives():
++    # The desktop File Explorer exposes each mounted drive as a browsable root
++    # alongside the app data root (D16). The data root is always present; a
++    # real Windows machine always has at least C:.
++    assert "data" in files.ALLOWED_ROOTS
++    assert "C:" in files.ALLOWED_ROOTS
++    assert files.ALLOWED_ROOTS["C:"] in ("C:\\", "c:\\")
++
++
++@pytest.mark.skipif(sys.platform != "win32",
++                    reason="drive letters are a Windows concept")
++def test_win32_safe_path_drive_absolute_and_cross_drive(monkeypatch):
++    monkeypatch.setattr(files, "get_data_root", lambda: "C:\\")
++    # Drive-absolute path under the current root is not double-rooted.
++    assert files.safe_path("C:\\Users\\me\\f.jsonl") == \
++        Path("C:\\Users\\me\\f.jsonl").resolve()
++    # Root-relative forward-slash form resolves under the drive root.
++    assert files.safe_path("Users/me/f.jsonl") == \
++        Path("C:\\Users\\me\\f.jsonl").resolve()
++    # The root itself.
++    assert files.safe_path("") == Path("C:\\").resolve()
++    # A path on a different drive is outside the root -> 400.
++    with pytest.raises(HTTPException) as exc:
++        files.safe_path("D:\\other\\f.jsonl")
++    assert exc.value.status_code == 400
++
++
+ # ---------------------------------------------------------------------------
+ # Group 6 — zip member names with Chinese characters
+ # ---------------------------------------------------------------------------
+-- 
+2.43.0
+

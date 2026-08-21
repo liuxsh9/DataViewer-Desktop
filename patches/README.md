@@ -22,7 +22,9 @@
 | 0015 | platformize-lock-concurrency-tests | §4.8 | lock/concurrency/monitor 测试平台化（CI 证据驱动） | ✅ Windows CI 绿 |
 | 0016 | folder-change-status-slash-normalize | §4.1 补漏 | folder_change_status 目录归一化保持正斜杠契约（Windows 反斜杠误报变更） | ✅ Windows CI 绿 |
 | 0017 | capabilities-public-path | §4.5 补漏 | `/api/capabilities` 加入 v4.10.1 新增 auth_middleware 的 PUBLIC_PATHS | ✅ Windows CI 绿 |
-| 0018 | static-favicon-public-path | §4.5 补漏 | 根静态 favicon 白名单（单进程 StaticFiles 直出；线上由 nginx 前置不走中间件） | 待 Windows CI |
+| 0018 | static-favicon-public-path | §4.5 补漏 | 根静态 favicon 白名单（单进程 StaticFiles 直出；线上由 nginx 前置不走中间件） | ✅ Windows CI 绿 |
+| 0019 | multi-root-drive-browsing | §4.9 (D16) | File Explorer 多根：Windows 枚举盘符（C:\ D:\ 含可移动）+ 数据目录；`safe_path` 跨平台重写（盘符/分隔符）；`relative_to().as_posix()` 正斜杠契约；disk-space 用动态根 | ✅ Linux 187 passed（win32 用例 skip） |
+| 0020 | frontend-root-switcher | §4.9 (D16) | File Explorer 根选择器动态化（从 `/api/files/root` 的 `available` 生成，替代硬编码 `{data, home}`）；`joinRootRel` 助手做盘符感知的路径显示/复制 | ✅ 前端 build 绿 |
 
 ## 注意事项
 

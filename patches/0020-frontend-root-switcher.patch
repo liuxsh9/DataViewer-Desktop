@@ -1,0 +1,119 @@
+From 87c71e2f43541f028d40f88e0ed65157a756020a Mon Sep 17 00:00:00 2001
+From: DataViewer-Desktop Sync <sync@dataviewer-desktop.local>
+Date: Fri, 21 Aug 2026 19:18:39 +0800
+Subject: [PATCH] feat(desktop): File Explorer root switcher shows available
+ roots (D16)
+
+- Root selector options are now built from /api/files/root 'available' (drive
+  roots C:, D: ... on Windows) instead of a hardcoded {data, home}.
+- Root-relative path display/copy uses a joinRootRel helper so drive roots
+  render as 'C:\Users\...' rather than '/data/...'.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ frontend/src/components/FileExplorer.jsx | 36 +++++++++++++++++-------
+ 1 file changed, 26 insertions(+), 10 deletions(-)
+
+diff --git a/frontend/src/components/FileExplorer.jsx b/frontend/src/components/FileExplorer.jsx
+index 0d7b18e..068216b 100644
+--- a/frontend/src/components/FileExplorer.jsx
++++ b/frontend/src/components/FileExplorer.jsx
+@@ -120,6 +120,16 @@ import { isWorkbenchEnabled } from '../utils/workbench';
+ 
+ const { Text } = Typography;
+ 
++// Join a root's filesystem path (e.g. "/data" on POSIX, "C:\\" on Windows)
++// with a root-relative path (forward-slash, e.g. "Users/me") into one display
++// string. Avoids the double-separator (`C:\/Users`) the naive `root + '/' + rel`
++// produces when the root already ends in a separator.
++function joinRootRel(rootPathLabel, rel) {
++  if (!rel) return rootPathLabel || '';
++  const sep = rootPathLabel && (rootPathLabel.endsWith('/') || rootPathLabel.endsWith('\\')) ? '' : '/';
++  return `${rootPathLabel || ''}${sep}${rel}`;
++}
++
+ // View modes: grouped (curated sections at root, falls back to list elsewhere),
+ // list (classic table), grid (tiles), detail (large cards with previews)
+ const VIEW_MODES = {
+@@ -217,6 +227,7 @@ const FileExplorer = ({
+   const [viewMode, setViewMode] = useState(VIEW_MODES.GROUPED);
+   const [rootPath, setRootPathState] = useState(externalRoot || 'data');
+   const [rootPathLabel, setRootPathLabel] = useState(externalRoot ? `/${externalRoot}` : '/data');
++  const [availableRoots, setAvailableRoots] = useState({});
+ 
+   // Sorting state - default to modified descending (newest first)
+   const [sortBy, setSortBy] = useState('modified'); // 'name', 'size', 'modified', 'type'
+@@ -1041,6 +1052,7 @@ const FileExplorer = ({
+         const currentRoot = response.data.current;
+         setRootPathState(currentRoot);
+         setRootPathLabel(response.data.current_path);
++        setAvailableRoots(response.data.available || {});
+ 
+         // If no external root from URL, notify parent to set default root in URL
+         if (!externalRoot && onRootChange) {
+@@ -2207,7 +2219,7 @@ const FileExplorer = ({
+     }
+     const path = file ? file.path : currentPath;
+     const folderName = file ? file.name : (currentPath.split('/').pop() || 'root');
+-    const displayPath = `/${rootPath}/${path}`;
++    const displayPath = joinRootRel(rootPathLabel, path);
+ 
+     // Try to get folder size with a timeout (don't block the dialog)
+     let size = 0;
+@@ -3821,7 +3833,7 @@ const FileExplorer = ({
+ 
+   // Copy full path to clipboard
+   const handleCopyFullPath = (record) => {
+-    const fullPath = `/data/${record.path}`;
++    const fullPath = joinRootRel(rootPathLabel, record.path);
+     if (navigator.clipboard && navigator.clipboard.writeText) {
+       navigator.clipboard.writeText(fullPath)
+         .then(() => {
+@@ -4065,7 +4077,7 @@ const FileExplorer = ({
+     }
+ 
+     // Show confirmation with simple confirm first
+-    const confirmMessage = `Move ${itemType}?\n\nFrom: /data/${itemToMove.path}\nTo: /data/${targetPath}\n\nClick OK to confirm.`;
++    const confirmMessage = `Move ${itemType}?\n\nFrom: ${joinRootRel(rootPathLabel, itemToMove.path)}\nTo: ${joinRootRel(rootPathLabel, targetPath)}\n\nClick OK to confirm.`;
+ 
+     if (window.confirm(confirmMessage)) {
+       try {
+@@ -6356,11 +6368,15 @@ const FileExplorer = ({
+               value={rootPath}
+               onChange={handleRootPathChange}
+               size="small"
+-              style={{ width: 100 }}
+-              options={[
+-                { value: 'data', label: '/data' },
+-                { value: 'home', label: '/home' }
+-              ]}
++              style={{ width: 120 }}
++              options={
++                Object.keys(availableRoots).length > 0
++                  ? Object.entries(availableRoots).map(([key, path]) => ({
++                      value: key,
++                      label: key.length === 2 && key.endsWith(':') ? key : path
++                    }))
++                  : [{ value: rootPath, label: rootPathLabel }]
++              }
+             />
+             <Divider type="vertical" style={{ margin: '0 4px' }} />
+             <Space.Compact size="small">
+@@ -6402,12 +6418,12 @@ const FileExplorer = ({
+             {/* Path copy buttons */}
+             {currentPath && (
+               <Space size={4}>
+-                <Tooltip title={`Copy full path: ${rootPathLabel}/${currentPath}`}>
++                <Tooltip title={`Copy full path: ${joinRootRel(rootPathLabel, currentPath)}`}>
+                   <Button
+                     size="small"
+                     icon={<CopyOutlined />}
+                     onClick={() => {
+-                      const fullPath = `${rootPathLabel}/${currentPath}`;
++                      const fullPath = joinRootRel(rootPathLabel, currentPath);
+                       copyToClipboard(fullPath);
+                     }}
+                   >
+-- 
+2.43.0
+
