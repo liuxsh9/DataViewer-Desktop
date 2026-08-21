@@ -72,9 +72,23 @@ if ($LASTEXITCODE -ge 8) { Fail "robocopy backend 失败: $LASTEXITCODE" }
 robocopy "$SourceDir\frontend\dist" "$FrontendOut\dist" /E > $null
 if ($LASTEXITCODE -ge 8) { Fail "robocopy frontend dist 失败: $LASTEXITCODE" }
 
-# python venv（backend/.venv 复制为绿色目录的 python/）
-robocopy "$SourceDir\backend\.venv" $PythonOut /E > $null
-if ($LASTEXITCODE -ge 8) { Fail "robocopy venv 失败: $LASTEXITCODE" }
+# python：Windows embeddable Python（自包含、可移植）+ 依赖 site-packages
+# 不能用 `robocopy backend\.venv python\`：venv 的 pyvenv.cfg/python.exe 绑定
+# runner 的绝对路径（用户机器报 "No Python at C:\hostedtoolcache\..."）。
+Write-Host "[build] 组装可移植 Python（embeddable + site-packages）..."
+$EmbedZip = Join-Path $env:TEMP "python-3.12.10-embed-amd64.zip"
+if (-not (Test-Path $EmbedZip)) {
+  Invoke-WebRequest "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" -OutFile $EmbedZip
+}
+Expand-Archive $EmbedZip $PythonOut -Force
+# embeddable 默认禁用 site-packages；解注释 `import site`
+$PthFile = Get-ChildItem $PythonOut -Filter "python*._pth" | Select-Object -First 1
+(Get-Content $PthFile.FullName) -replace '^#import site', 'import site' | Set-Content $PthFile.FullName
+# 依赖：把 backend/.venv 的 site-packages（纯文件，cp312 二进制）复制进 embeddable
+$SitePkgs = Join-Path $PythonOut "Lib\site-packages"
+New-Item -ItemType Directory -Force -Path $SitePkgs | Out-Null
+robocopy "$SourceDir\backend\.venv\Lib\site-packages" $SitePkgs /E /NFL /NDL /NJH /NJS > $null
+if ($LASTEXITCODE -ge 8) { Fail "robocopy site-packages 失败: $LASTEXITCODE" }
 
 # 4. 配置模板（launcher M3 会实现 secrets.env 生成与 .env 加载；
 #    此模板记录桌面版默认：外网能力全关）
@@ -101,7 +115,7 @@ DataViewer Desktop $Version (绿色包)
 
 启动: 双击 start.bat（M2 简化版；M3 由 pystray 托盘启动器取代）
 然后浏览器自动打开 http://127.0.0.1:8888
-（手动: .\python\Scripts\python.exe -m uvicorn main:app --app-dir backend --port 8888）
+（手动: .\python\python.exe -m uvicorn main:app --app-dir backend --port 8888）
 
 首次启动: start.bat 自动生成 %LOCALAPPDATA%\DataViewerDesktop\secrets.env
 （JWT_SECRET_KEY 随机生成；ADMIN_PASSWORD 默认 admin123，登录后请修改）
@@ -122,7 +136,7 @@ set "METADATA_DIR=%CONF_DIR%\metadata"
 set "LOG_DIR=%CONF_DIR%\logs"
 if not exist "%CONF_DIR%" mkdir "%CONF_DIR%"
 if not exist "%CONF_DIR%\secrets.env" (
-  "%APP_DIR%python\Scripts\python.exe" -c "import secrets,pathlib; p=pathlib.Path(r'%CONF_DIR%'); p.mkdir(parents=True,exist_ok=True); (p/'secrets.env').write_text('JWT_SECRET_KEY='+secrets.token_hex(32)+chr(10)+'ADMIN_PASSWORD=admin123'+chr(10))"
+  "%APP_DIR%python\python.exe" -c "import secrets,pathlib; p=pathlib.Path(r'%CONF_DIR%'); p.mkdir(parents=True,exist_ok=True); (p/'secrets.env').write_text('JWT_SECRET_KEY='+secrets.token_hex(32)+chr(10)+'ADMIN_PASSWORD=admin123'+chr(10))"
 )
 set "DV_SECRETS_FILE=%CONF_DIR%\secrets.env"
 REM 首版禁用（D4/D5/D6）：外网能力全关
@@ -140,7 +154,7 @@ set WORKBENCH_ENABLED=false
 set PORT=8888
 REM Windows 控制台默认 cp1252，源码有 Unicode 顶层 print 会崩（如 pilot.py ✓）
 set PYTHONUTF8=1
-start "" /b "%APP_DIR%python\Scripts\python.exe" -m uvicorn main:app --app-dir "%APP_DIR%backend" --host 127.0.0.1 --port %PORT%
+start "" /b "%APP_DIR%python\python.exe" -m uvicorn main:app --app-dir "%APP_DIR%backend" --host 127.0.0.1 --port %PORT%
 timeout /t 3 /nobreak >nul
 start http://127.0.0.1:%PORT%
 echo DataViewer Desktop 已启动: http://127.0.0.1:%PORT% （关闭本窗口不会停服务；任务管理器结束 python 或运行 stop.bat）
