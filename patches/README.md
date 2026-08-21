@@ -17,6 +17,12 @@
 | 0010 | windows-unix-module-guards | §4.8 实测 | fcntl/pty/termios 容忍导入（Windows 无 flock → 单机锁 no-op；claude terminal 入口 503） | ✅ Linux 921/1/2；Windows CI 首跑暴露后修复 |
 | 0011 | declare-cryptography-base-dep | §4.4 补漏 | `cryptography` 显式声明为 base 依赖（原靠 ray[default] 传递满足，拆分后 Windows 闭包缺失） | ✅ base 闭包模拟（python3 -S + pip --target）：零缺失、918 全收集 |
 | 0012 | writeback-lock-tests-platform | §4.8 | 测试文件去掉未用 `import fcntl`；flock 语义用例 win32 skipif（锁为文档化 no-op） | ✅ Linux 55 passed |
+| 0013 | windows-path-crlf-production-fixes | §4.8 实测 | manifest 反斜杠键（aggregation_worker rel_path）、pangu_to_atif 字节解析 CRLF 窗口 | ✅ Windows CI 绿 |
+| 0014 | platformize-posix-only-test-expectations | §4.8 | config/safe_path/validate_path 测试的 POSIX-only 期望平台化 | ✅ Windows CI 绿 |
+| 0015 | platformize-lock-concurrency-tests | §4.8 | lock/concurrency/monitor 测试平台化（CI 证据驱动） | ✅ Windows CI 绿 |
+| 0016 | folder-change-status-slash-normalize | §4.1 补漏 | folder_change_status 目录归一化保持正斜杠契约（Windows 反斜杠误报变更） | ✅ Windows CI 绿 |
+| 0017 | capabilities-public-path | §4.5 补漏 | `/api/capabilities` 加入 v4.10.1 新增 auth_middleware 的 PUBLIC_PATHS | ✅ Windows CI 绿 |
+| 0018 | static-favicon-public-path | §4.5 补漏 | 根静态 favicon 白名单（单进程 StaticFiles 直出；线上由 nginx 前置不走中间件） | 待 Windows CI |
 
 ## 注意事项
 

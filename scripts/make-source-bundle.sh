@@ -11,7 +11,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASELINE="${1:-cc71d62}"
+BASELINE="${1:-v4.10.1}"
 VERSION="${2:-v4.10.1-d1}"
 
 # 1. 同步（clone/fetch → checkout 基线 → apply patches）

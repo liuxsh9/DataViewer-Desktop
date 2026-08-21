@@ -1,0 +1,34 @@
+From ce5f0228e8165bb9b97a5049dfaa97fd72f1dc91 Mon Sep 17 00:00:00 2001
+From: DataViewer-Desktop Sync <sync@dataviewer-desktop.local>
+Date: Fri, 21 Aug 2026 13:21:07 +0800
+Subject: [PATCH] =?UTF-8?q?fix(desktop):=20=E6=A0=B9=E9=9D=99=E6=80=81=20f?=
+ =?UTF-8?q?avicon=20=E5=8A=A0=E9=89=B4=E6=9D=83=E7=99=BD=E5=90=8D=E5=8D=95?=
+ =?UTF-8?q?=EF=BC=88=E5=8D=95=E8=BF=9B=E7=A8=8B=20StaticFiles=20=E7=9B=B4?=
+ =?UTF-8?q?=E5=87=BA=EF=BC=8C=E7=BA=BF=E4=B8=8A=E7=94=B1=20nginx=20?=
+ =?UTF-8?q?=E5=89=8D=E7=BD=AE=EF=BC=89?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ backend/middleware/auth_middleware.py | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/backend/middleware/auth_middleware.py b/backend/middleware/auth_middleware.py
+index 6eb7c90..8028b59 100644
+--- a/backend/middleware/auth_middleware.py
++++ b/backend/middleware/auth_middleware.py
+@@ -19,6 +19,9 @@ PUBLIC_PATHS = [
+     # Desktop capability probe — the frontend fetches this at startup before
+     # login to decide which feature entries to render; it leaks no data.
+     "/api/capabilities",
++    # Root static favicon: served by StaticFiles in the single-process desktop
++    # bundle; the online deploy serves it via nginx before this middleware runs.
++    "/dataviewer-logo.svg",
+     "/docs",
+     "/openapi.json",
+     "/redoc",
+-- 
+2.43.0
+

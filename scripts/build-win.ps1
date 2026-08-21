@@ -127,7 +127,7 @@ DataViewer Desktop $Version (绿色包)
 # start.bat（M2 简化版启动脚本：生成 secrets → 起 uvicorn → 开浏览器）
 @"
 @echo off
-REM DataViewer Desktop $Version — M2 简化版启动脚本（M3 由 pystray launcher 取代）
+REM DataViewer Desktop $Version — M2 simple launcher (M3 replaces it with a pystray launcher)
 setlocal
 set "APP_DIR=%~dp0"
 set "DATA_ROOT=%USERPROFILE%\DataViewerData"
@@ -135,11 +135,16 @@ set "CONF_DIR=%LOCALAPPDATA%\DataViewerDesktop"
 set "METADATA_DIR=%CONF_DIR%\metadata"
 set "LOG_DIR=%CONF_DIR%\logs"
 if not exist "%CONF_DIR%" mkdir "%CONF_DIR%"
+REM DATA_ROOT is the File Explorer root; shutil.disk_usage needs it to exist
+REM (online Linux pre-creates /data; Windows launcher creates it here)
+if not exist "%DATA_ROOT%" mkdir "%DATA_ROOT%"
+if not exist "%METADATA_DIR%" mkdir "%METADATA_DIR%"
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if not exist "%CONF_DIR%\secrets.env" (
   "%APP_DIR%python\python.exe" -c "import secrets,pathlib; p=pathlib.Path(r'%CONF_DIR%'); p.mkdir(parents=True,exist_ok=True); (p/'secrets.env').write_text('JWT_SECRET_KEY='+secrets.token_hex(32)+chr(10)+'ADMIN_PASSWORD=admin123'+chr(10))"
 )
 set "DV_SECRETS_FILE=%CONF_DIR%\secrets.env"
-REM 首版禁用（D4/D5/D6）：外网能力全关
+REM First release disables external capabilities (D4/D5/D6): all off
 set GATEWAY_PUSH_ENABLED=false
 set DATALAB_ENABLED=false
 set HF_ENABLED=false
@@ -152,12 +157,13 @@ set QUALITY_RAY_ENABLED=false
 set TRAJ_VIZ_ENABLED=false
 set WORKBENCH_ENABLED=false
 set PORT=8888
-REM Windows 控制台默认 cp1252，源码有 Unicode 顶层 print 会崩（如 pilot.py ✓）
+REM Windows console defaults to cp1252; source has Unicode top-level prints
+REM (e.g. pilot.py check mark) that crash — force UTF-8.
 set PYTHONUTF8=1
 start "" /b "%APP_DIR%python\python.exe" -m uvicorn main:app --app-dir "%APP_DIR%backend" --host 127.0.0.1 --port %PORT%
 timeout /t 3 /nobreak >nul
 start http://127.0.0.1:%PORT%
-echo DataViewer Desktop 已启动: http://127.0.0.1:%PORT% （关闭本窗口不会停服务；任务管理器结束 python 或运行 stop.bat）
+echo DataViewer Desktop running at http://127.0.0.1:%PORT%  (closing this window keeps the service running; use stop.bat or Task Manager to stop)
 "@ | Out-File -FilePath (Join-Path $OutputDir "start.bat") -Encoding ascii
 
 # 5. 打包 zip

@@ -1,6 +1,6 @@
 # DataViewer Desktop — 单机 Windows 版实现方案与总体计划
 
-> 状态：ADR 已定（D1-D15，仅 D6 待用户最终拍板）；M0 完成、M1 主体完成（2026-08-20），下一步 M2
+> 状态：ADR 已定（D1-D15 全部拍板）；M0/M1 完成、M2 CI 完成（2026-08-20），真机冒烟修复中（2026-08-21）；上游已推进至 v4.10.3（重锁待定）
 > 上游：`/data/projects/DataViewer`（单一代码库，本仓不做业务代码 fork）
 > 目标平台：Windows 10/11 x64
 > 定稿日期：2026-08-19
@@ -267,7 +267,7 @@ release asset（`gh release create <版本>-src`）；`.github/workflows/windows
 |------|------|----------|------|------|
 | **M0 脚手架** | 本仓结构、sync-upstream 流程、CI 骨架、workspace 同步到上游基线跑通 pytest | Linux 上 patch 流程端到端可用 | 0.5-1 周 | ✅ 完成 2026-08-20：基线锁定 commit `1d2b0df`（上游无 tag）；sync 脚本从零跑通、工作树干净；上游后端 pytest **875/876**（1 个既存失败：`test_report_panguml_shape` 依赖本机 workbench 在线，上游工作树同环境复现，不修）；前端 `npm ci && npm run build` 通过；CI 占位骨架 `linux-pytest.yml` 已落（D7 拍板后迁至 `.github/workflows/`）。**2026-08-20 基线随上游 HEAD 更新至 v4.13.0 = `cc71d62`**，pytest 基线复核 **882/883**（唯一失败同上）；**同日上游版本线收敛（anchor v4.10.0）并发布 v4.10.1（git tag），基线重锁 v4.10.1**，15 补丁 rebase 后 fork/spawn 全量 **1008/1/2** |
 | **M1 适配补丁**（核心风险） | 4.1 路径收敛 → 4.2 spawn → 4.3 内存 → 4.4 依赖拆分 → 4.5 capability → 4.6 认证 → 4.7 降级 | 上游 pytest 全绿 + Linux spawn 模式全绿 + Windows CI pytest 绿 | 2-3 周 | ✅ **主体完成 2026-08-20**：9 个补丁（patches/0001-0009，见 patches/README.md），重放树上 fork **921/1/2**、spawn **921/1/2**（唯一失败 = workbench 离线既存问题，非补丁引入）；前端 build 绿。**遗留**：① Windows CI 验证（M2/构建机，D7）② uv.lock 失配需构建机补 `uv lock` ③ D6 待拍板后统一 SampleBrowser 前端 gate（D14） |
-| **M2 Windows 冒烟** | 绿色包在 Windows 真机跑通核心链路 | 浏览/JSONL/聚合/格式转换/dataset-stats 小任务全过；外网功能不可见 | 1-2 周 | 🔄 CI 完成 2026-08-20（pytest 226/0/8、构建、冒烟、artifact 148MB 全绿；仓库已转公开）；待**用户真机冒烟**（kickoff.md 清单） |
+| **M2 Windows 冒烟** | 绿色包在 Windows 真机跑通核心链路 | 浏览/JSONL/聚合/格式转换/dataset-stats 小任务全过；外网功能不可见 | 1-2 周 | 🔄 CI 完成 2026-08-20（pytest 226/0/8、构建、冒烟、artifact 148MB 全绿；仓库已转公开）。**真机冒烟 2026-08-21**：起服成功、登录/静态页/系统监控正常；暴露 2 个 Windows 专属缺陷——① `/api/system/disk-space` 500（DATA_ROOT 未建，Linux 线上 `/data` 预建、Windows 无）→ start.bat 前置 `mkdir DATA_ROOT`；② `/dataviewer-logo.svg` 401（v4.10.1 auth_middleware 拦根静态文件，线上由 nginx 前置不触发、单进程 StaticFiles 直出触发）→ 补丁 0018 白名单。CI 冒烟同步扩展 favicon + setup 登录 + disk-space 断言，重跑中 |
 | **M3 产品化** | pystray 启动器、Inno Setup、使用说明、日志收集 | 双击安装 → 一键使用；卸载干净 | 1 周 | 未开始 |
 | **M4 持续演进** | 上游 tag 跟随机制、双平台 CI 常态化、补丁上游化节奏 | 每次上游 release 一周内出对应 -d 包 | 持续 | 未开始 |
 
