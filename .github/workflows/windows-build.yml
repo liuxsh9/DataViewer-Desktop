@@ -103,6 +103,9 @@ jobs:
           # 诊断：起服前先验证 import 链（崩溃点直接进 runner 日志）
           & "..\python\python.exe" -c "import main; print('IMPORT_OK')"
           if ($LASTEXITCODE -ne 0) { throw "import main 失败: $LASTEXITCODE" }
+          # launcher 打包完整性（M3）：pystray/Pillow/tkinter 已入 embeddable，launcher.py 就位且可编译
+          & "..\python\python.exe" -c "import pystray, PIL, tkinter, py_compile; py_compile.compile(r'..\launcher\launcher.py', doraise=True); print('LAUNCHER_OK')"
+          if ($LASTEXITCODE -ne 0) { throw "launcher 打包不完整: $LASTEXITCODE" }
           # embeddable Python 的 python.exe 在 python/ 根目录（自包含，不依赖 runner 路径）
           $proc = Start-Process -FilePath "..\python\python.exe" `
             -ArgumentList "-m","uvicorn","main:app","--port","8888" `
@@ -150,7 +153,12 @@ jobs:
             if (-not $tok) { throw "setup 未返回 access_token" }
             $disk = Invoke-WebRequest -Uri "http://127.0.0.1:8888/api/system/disk-space" -Headers @{ Authorization = "Bearer $tok" } -TimeoutSec 5
             if ($disk.StatusCode -ne 200) { throw "disk-space 异常: $($disk.StatusCode)" }
-            Write-Host "[smoke] OK: health + capabilities(11 off) + 静态页 + JS chunk + 鉴权 401 + favicon + setup登录 + disk-space"
+            # 多根盘符浏览（D16/补丁 0019）：/api/files/root 应列出 data 根 + Windows 盘符
+            $rootInfo = (Invoke-WebRequest -Uri "http://127.0.0.1:8888/api/files/root").Content | ConvertFrom-Json
+            $rootKeys = @($rootInfo.available.PSObject.Properties.Name)
+            if ($rootKeys -notcontains "data") { throw "files/root 缺 data 根: $($rootKeys -join ',')" }
+            if ($rootKeys -notcontains "C:") { throw "files/root 缺盘符根 C:: $($rootKeys -join ',')" }
+            Write-Host "[smoke] OK: health + capabilities(11 off) + 静态页 + JS chunk + 鉴权 401 + favicon + setup登录 + disk-space + 多根(data+C:)"
           } finally {
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
           }

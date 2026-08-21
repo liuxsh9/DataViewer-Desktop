@@ -62,7 +62,8 @@ if (Test-Path $OutputDir) { Remove-Item $OutputDir -Recurse -Force }
 $BackendOut = Join-Path $OutputDir "backend"
 $FrontendOut = Join-Path $OutputDir "frontend"
 $PythonOut = Join-Path $OutputDir "python"
-New-Item -ItemType Directory -Force -Path $BackendOut, $FrontendOut, $PythonOut | Out-Null
+$LauncherOut = Join-Path $OutputDir "launcher"
+New-Item -ItemType Directory -Force -Path $BackendOut, $FrontendOut, $PythonOut, $LauncherOut | Out-Null
 
 # backend 源码（排除 .venv/缓存/测试无关产物）
 robocopy "$SourceDir\backend" $BackendOut /E /XD .venv __pycache__ .pytest_cache tests /XF *.pyc uv.lock > $null
@@ -90,6 +91,17 @@ New-Item -ItemType Directory -Force -Path $SitePkgs | Out-Null
 robocopy "$SourceDir\backend\.venv\Lib\site-packages" $SitePkgs /E /NFL /NDL /NJH /NJS > $null
 if ($LASTEXITCODE -ge 8) { Fail "robocopy site-packages 失败: $LASTEXITCODE" }
 
+# launcher（M3 托盘启动器）：launcher.py + 可选 icon.ico（无 icon 时 launcher 内存绘制）
+Copy-Item "$PSScriptRoot\..\launcher\launcher.py" $LauncherOut -Force
+if (Test-Path "$PSScriptRoot\..\launcher\icon.ico") {
+  Copy-Item "$PSScriptRoot\..\launcher\icon.ico" $LauncherOut -Force
+}
+# launcher 依赖 pystray + Pillow：装进 embeddable python 的 site-packages。
+# 用 runner 的 setup-python（有 pip，同为 3.12 x64）--target 到 $SitePkgs；
+# embeddable python 自带 python 不带 pip，不能直接 pip install。
+python -m pip install --target $SitePkgs pystray pillow
+if ($LASTEXITCODE -ne 0) { Fail "pip install pystray pillow 失败: $LASTEXITCODE" }
+
 # 4. 配置模板（launcher M3 会实现 secrets.env 生成与 .env 加载；
 #    此模板记录桌面版默认：外网能力全关）
 @"
@@ -110,19 +122,8 @@ WORKBENCH_ENABLED=false
 # DATA_ROOT=
 "@ | Out-File -FilePath (Join-Path $OutputDir "desktop.env.template") -Encoding utf8
 
-@"
-DataViewer Desktop $Version (绿色包)
-
-启动: 双击 start.bat（M2 简化版；M3 由 pystray 托盘启动器取代）
-然后浏览器自动打开 http://127.0.0.1:8888
-（手动: .\python\python.exe -m uvicorn main:app --app-dir backend --port 8888）
-
-首次启动: start.bat 自动生成 %LOCALAPPDATA%\DataViewerDesktop\secrets.env
-（JWT_SECRET_KEY 随机生成；ADMIN_PASSWORD 默认 admin123，登录后请修改）
-
-配置: 见 desktop.env.template；外网能力首版默认全关（D4/D5/D6）
-数据: %USERPROFILE%\DataViewerData（DATA_ROOT），元数据/日志在 %LOCALAPPDATA%\DataViewerDesktop
-"@ | Out-File -FilePath (Join-Path $OutputDir "README-使用说明.md") -Encoding utf8
+# 使用说明：直接用仓库的 docs/README-使用说明.md（不内嵌，避免重编码漂移）
+Copy-Item "$PSScriptRoot\..\docs\README-使用说明.md" (Join-Path $OutputDir "README-使用说明.md") -Force
 
 # start.bat（M2 简化版启动脚本：生成 secrets → 起 uvicorn → 开浏览器）
 @"

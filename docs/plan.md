@@ -207,6 +207,10 @@ DataViewerDesktop/
   - 路径显示 Windows 化（`C:\...` 反斜杠、盘符）。
 - **验收**：Windows 真机在 C:\ D:\ 间切换浏览/读 JSONL/写转换输出；Linux 行为不变（`{data, home}` 单根 UI 仍正常）；双平台 CI 绿。
 
+**D16 实施进度（2026-08-21）**：
+- ✅ **增量 1（盘符浏览核心，已完成）**：补丁 0019（后端多根：盘符枚举 + `safe_path` 跨平台 + `relative_to().as_posix()` + disk-space 动态根）+ 补丁 0020（前端根选择器动态化 + `joinRootRel` 盘符感知显示）。File Explorer 可在 C:\ D:\ 间切换并浏览/读 JSONL/下载/上传/删除/移动/建目录。CI 冒烟新增 `/api/files/root` 多根断言。
+- ⏳ **增量 2（转换/选择器等次级流的 `/data/` 去硬编码，未开始）**：约 24 个文件的 `/data/` 前缀（FolderBrowser / FolderSelector / FormatConvertModal / TokenCalculator / SpotChecker / AggregationWorkspace / ValidationManager / CopyTaskManager 等）。当前这些流仍按 `/data/`（数据根）语义工作——在**盘符根**上触发转换/选输出目录会解析错根，属已知限制。核心浏览不受影响。
+
 ---
 
 ## 5. 本仓结构
