@@ -293,20 +293,23 @@ def wait_for_health(port: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Error dialog (tkinter ships with the embeddable Python)
+# Error dialog — Win32 MessageBox via ctypes
 # ---------------------------------------------------------------------------
 
 def show_error(title: str, message: str) -> None:
-    """Show a modal error box. Under pythonw.exe there is no console, so the
-    message box is the only way the user sees the failure. Never raises."""
+    """Show a modal error box via the Win32 MessageBox API (ctypes).
+
+    The embeddable Python does NOT ship tkinter, so the usual
+    ``tkinter.messagebox`` approach fails at import time on a desktop install.
+    ``ctypes.windll.user32.MessageBoxW`` is part of the Windows API, is always
+    available, and needs no extra dependency. Under pythonw.exe there is no
+    console, so this box is the only way the user sees the failure. Never raises.
+    """
     try:
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()  # hide the empty root window behind the dialog
-        messagebox.showerror(title, message)
-        root.destroy()
-    except Exception as exc:  # tk unavailable or headless — fall back to log
+        import ctypes
+        MB_ICONERROR = 0x10
+        ctypes.windll.user32.MessageBoxW(None, str(message), str(title), MB_ICONERROR)
+    except Exception as exc:  # ctypes/Windows unavailable — fall back to log
         logger.error("Could not show message box (%s); message was: %s", exc, message)
 
 

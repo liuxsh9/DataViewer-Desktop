@@ -103,8 +103,9 @@ jobs:
           # 诊断：起服前先验证 import 链（崩溃点直接进 runner 日志）
           & "..\python\python.exe" -c "import main; print('IMPORT_OK')"
           if ($LASTEXITCODE -ne 0) { throw "import main 失败: $LASTEXITCODE" }
-          # launcher 打包完整性（M3）：pystray/Pillow/tkinter 已入 embeddable，launcher.py 就位且可编译
-          & "..\python\python.exe" -c "import pystray, PIL, tkinter, py_compile; py_compile.compile(r'..\launcher\launcher.py', doraise=True); print('LAUNCHER_OK')"
+          # launcher 打包完整性（M3）：pystray/Pillow 已入 embeddable，launcher.py 就位且可编译
+          # （embeddable 无 tkinter，launcher 错误弹窗走 ctypes MessageBoxW，无需 tkinter）
+          & "..\python\python.exe" -c "import pystray, PIL, py_compile; py_compile.compile(r'..\launcher\launcher.py', doraise=True); print('LAUNCHER_OK')"
           if ($LASTEXITCODE -ne 0) { throw "launcher 打包不完整: $LASTEXITCODE" }
           # embeddable Python 的 python.exe 在 python/ 根目录（自包含，不依赖 runner 路径）
           $proc = Start-Process -FilePath "..\python\python.exe" `
