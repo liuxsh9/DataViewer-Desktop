@@ -124,7 +124,19 @@ jobs:
             foreach ($k in $off) { if ($caps.$k) { throw "capability 应为 false: $k" } }
             $idx = Invoke-WebRequest -Uri "http://127.0.0.1:8888/" -TimeoutSec 5
             if ($idx.StatusCode -ne 200 -or $idx.Content -notmatch "DataViewer") { throw "静态首页异常" }
-            Write-Host "[smoke] OK: health + capabilities(11 off) + 静态首页"
+            # 前端 dist 完整：从 index.html 抽一个 JS chunk 并请求 200
+            $asset = [regex]::Match($idx.Content, 'src="([^"]+\.js)"').Groups[1].Value
+            if (-not $asset) { throw "index.html 无 JS chunk 引用" }
+            $a = Invoke-WebRequest -Uri ("http://127.0.0.1:8888" + $asset) -TimeoutSec 5
+            if ($a.StatusCode -ne 200) { throw "JS chunk 不可达: $asset" }
+            # 鉴权中间件生效：未带 token 的核心 API 应 401（不是 500/200）
+            try {
+              Invoke-WebRequest -Uri "http://127.0.0.1:8888/api/files/list" -TimeoutSec 5 | Out-Null
+              throw "未鉴权 /api/files/list 应被拒"
+            } catch {
+              if ($_.Exception.Response.StatusCode -ne 401) { throw "预期 401，实际: $($_.Exception.Response.StatusCode)" }
+            }
+            Write-Host "[smoke] OK: health + capabilities(11 off) + 静态页 + JS chunk + 鉴权 401"
           } finally {
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
           }
