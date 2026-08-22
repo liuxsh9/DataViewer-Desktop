@@ -25,6 +25,7 @@
 | 0018 | static-favicon-public-path | §4.5 补漏 | 根静态 favicon 白名单（单进程 StaticFiles 直出；线上由 nginx 前置不走中间件） | ✅ Windows CI 绿 |
 | 0019 | multi-root-drive-browsing | §4.9 (D16) | File Explorer 多根：Windows 枚举盘符（C:\ D:\ 含可移动）+ 数据目录；`safe_path` 跨平台重写（盘符/分隔符）；`relative_to().as_posix()` 正斜杠契约；disk-space 用动态根 | ✅ Linux 187 passed（win32 用例 skip） |
 | 0020 | frontend-root-switcher | §4.9 (D16) | File Explorer 根选择器动态化（从 `/api/files/root` 的 `available` 生成，替代硬编码 `{data, home}`）；`joinRootRel` 助手做盘符感知的路径显示/复制 | ✅ 前端 build 绿 |
+| 0021 | gate-trajlens-probe | §4.9 补漏 | File Explorer 的 traj-lens 可用性探测 gate 到 `traj_viz` 开关后（禁用时跳过，避免每次挂载 503 刷 console） | ✅ 前端 build 绿 |
 
 ## 注意事项
 

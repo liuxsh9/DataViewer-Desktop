@@ -170,3 +170,26 @@ jobs:
         with:
           name: DataViewer-Desktop-${{ inputs.version }}-win64
           path: build/${{ inputs.version }}.zip
+
+      - name: 编译安装器（Inno Setup 6）
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Invoke-WebRequest "https://files.jrsoftware.org/is/6/innosetup-6.2.2.exe" -OutFile "$env:TEMP\innosetup.exe"
+            Start-Process "$env:TEMP\innosetup.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" -Wait
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe 未找到: $iscc" }
+          $version = "${{ inputs.version }}"
+          $appVersion = $version.TrimStart('v')
+          $buildDir = (Resolve-Path "build\$version").Path
+          & $iscc "/dBuildDir=$buildDir" "/dAppVersion=$appVersion" "installer\dataviewer-desktop.iss"
+          if ($LASTEXITCODE -ne 0) { throw "iscc 编译失败: $LASTEXITCODE" }
+          Get-ChildItem installer\Output\*.exe | ForEach-Object { Write-Host "安装器产物: $($_.FullName)" }
+
+      - name: 上传安装器（exe）
+        uses: actions/upload-artifact@v4
+        with:
+          name: DataViewerDesktopSetup-${{ inputs.version }}
+          path: installer/Output/*.exe
+          if-no-files-found: error

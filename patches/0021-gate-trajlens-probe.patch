@@ -1,0 +1,45 @@
+From c555037a85f7fc8b184e873a45dd4ae3d6995391 Mon Sep 17 00:00:00 2001
+From: DataViewer-Desktop Sync <sync@dataviewer-desktop.local>
+Date: Fri, 21 Aug 2026 22:41:16 +0800
+Subject: [PATCH] fix(desktop): gate traj-lens availability probe behind
+ traj_viz capability
+
+When traj_viz is disabled (desktop first release) the probe hits a 503 on
+every File Explorer mount, spamming the console. Skip the call entirely when
+the capability is off.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+---
+ frontend/src/components/FileExplorer.jsx | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/frontend/src/components/FileExplorer.jsx b/frontend/src/components/FileExplorer.jsx
+index 068216b..75ba723 100644
+--- a/frontend/src/components/FileExplorer.jsx
++++ b/frontend/src/components/FileExplorer.jsx
+@@ -1070,14 +1070,20 @@ const FileExplorer = ({
+     loadPinnedItems();
+   }, []);
+ 
+-  // Check traj-lens availability
++  // Check traj-lens availability. When traj_viz is disabled (desktop first
++  // release), the endpoint returns 503 — skip the probe entirely to avoid
++  // noisy console errors and wasted requests on a capability that is off.
+   useEffect(() => {
++    if (!caps.traj_viz) {
++      setTrajlensAvailable(false);
++      return;
++    }
+     getTrajlensStatus().then(data => {
+       setTrajlensAvailable(data.available === true);
+     }).catch(() => {
+       setTrajlensAvailable(false);
+     });
+-  }, []);
++  }, [caps.traj_viz]);
+ 
+   const handleTrajlensIngest = async (record, { navigate = true } = {}) => {
+     const absPath = `/data/${record.path}`;
+-- 
+2.43.0
+
