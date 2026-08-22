@@ -57,10 +57,10 @@ ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 ; Shortcuts.
 DefaultGroupName={#AppName}
-{#if HasCustomIcon}
+#if HasCustomIcon
 SetupIconFile={#IconFile}
 UninstallDisplayIcon={#IconFile}
-{#endif}
+#endif
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
